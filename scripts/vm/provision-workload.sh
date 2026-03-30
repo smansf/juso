@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # provision-workload.sh
 # Creates a Linux user and sets up a dedicated OpenClaw gateway instance for a workload.
-# Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] <workload-name>
+# Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>
 # Run from the repo root as juso-admin-vm.
 
 set -euo pipefail
@@ -9,7 +9,6 @@ set -euo pipefail
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="${SCRIPT_DIR}/openclaw.json.template"
 BEFORE_RULES="/etc/ufw/before.rules"
 BASE_PORT=18789
 RESERVED=("root" "juso" "juso-admin-vm" "daemon" "nobody" "sudo")
@@ -17,6 +16,8 @@ RESERVED=("root" "juso" "juso-admin-vm" "daemon" "nobody" "sudo")
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
 INTERNET="none"
+MODEL_ID=""
+CONTEXT_TOKENS=""
 WORKLOAD=""
 
 while [[ $# -gt 0 ]]; do
@@ -29,9 +30,25 @@ while [[ $# -gt 0 ]]; do
       INTERNET="${2:-}"
       shift 2
       ;;
+    --model-id=*)
+      MODEL_ID="${1#--model-id=}"
+      shift
+      ;;
+    --model-id)
+      MODEL_ID="${2:-}"
+      shift 2
+      ;;
+    --context-tokens=*)
+      CONTEXT_TOKENS="${1#--context-tokens=}"
+      shift
+      ;;
+    --context-tokens)
+      CONTEXT_TOKENS="${2:-}"
+      shift 2
+      ;;
     -*)
       echo "Error: unknown option '$1'"
-      echo "Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] <workload-name>"
+      echo "Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>"
       exit 1
       ;;
     *)
@@ -42,13 +59,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$WORKLOAD" ]]; then
-  echo "Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] <workload-name>"
-  echo "Example: sudo ~/juso/scripts/provision-workload.sh --internet=open research"
+  echo "Usage: sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>"
+  echo "Example: sudo ~/juso/scripts/provision-workload.sh --internet=open --model-id qwen3:30b --context-tokens 32768 research"
   exit 1
 fi
 
 if [[ "$INTERNET" != "none" && "$INTERNET" != "open" ]]; then
   echo "Error: --internet must be 'none' or 'open' (got '${INTERNET}')."
+  exit 1
+fi
+
+if [[ -z "$MODEL_ID" ]]; then
+  echo "Error: --model-id is required. Specify the Ollama model to use (e.g. --model-id qwen3:30b)."
+  exit 1
+fi
+
+if [[ -z "$CONTEXT_TOKENS" ]]; then
+  echo "Error: --context-tokens is required. Specify the context window size (e.g. --context-tokens 32768)."
   exit 1
 fi
 
@@ -111,9 +138,11 @@ fi
 
 echo ""
 echo "==> Provisioning workload: ${WORKLOAD}"
-echo "    Linux user : ${USER}"
-echo "    Port       : ${PORT}"
-echo "    Internet   : ${INTERNET}"
+echo "    Linux user     : ${USER}"
+echo "    Port           : ${PORT}"
+echo "    Internet       : ${INTERNET}"
+echo "    Model          : ${MODEL_ID}"
+echo "    Context tokens : ${CONTEXT_TOKENS}"
 echo ""
 
 # ─── Create Linux user ────────────────────────────────────────────────────────
@@ -188,45 +217,98 @@ if [[ ! -d "/run/user/${USER_UID}" ]]; then
   exit 1
 fi
 
-# ─── Install gateway service ──────────────────────────────────────────────────
+# ─── Onboard openclaw, apply juso config, validate ───────────────────────────
 
 SERVICE_FILE="${USER_HOME}/.config/systemd/user/openclaw-gateway.service"
 CONFIG="${OPENCLAW_DIR}/openclaw.json"
 
 if [[ -f "$SERVICE_FILE" ]]; then
-  echo "[skip] Gateway service already installed"
+  echo "[skip] Gateway already provisioned"
 else
-  echo "[+] Running openclaw gateway install as ${USER}..."
+  echo "[+] Running openclaw onboard as ${USER}..."
   sudo -u "$USER" bash -c "
     export HOME=${USER_HOME}
     export XDG_RUNTIME_DIR=/run/user/${USER_UID}
     export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
-    openclaw gateway install --port ${PORT}
+    openclaw onboard \
+      --non-interactive \
+      --auth-choice ollama \
+      --custom-base-url 'http://192.168.64.1:11434' \
+      --custom-model-id '${MODEL_ID}' \
+      --gateway-port ${PORT} \
+      --gateway-bind loopback \
+      --skip-skills \
+      --install-daemon \
+      --accept-risk
   "
-fi
 
-# ─── Write openclaw.json from template ───────────────────────────────────────
-# This runs AFTER `openclaw gateway install` so that our template (which sets
-# gateway.bind=loopback and other juso-specific values) wins. `gateway install`
-# auto-generates a default config with gateway.bind=lan; if we wrote the
-# template first it would be overwritten. Writing it second ensures our values
-# are authoritative.
-#
-# Template context (comments removed from template to keep it valid JSON):
-#   - Ollama runs on the Mac mini host at 192.168.64.1 (AVF virtual network address)
-#   - native Ollama API (no /v1 path); tool calling is only reliable via native API
-#   - memorySearch still uses /v1/ path — correct for embeddings only; provider
-#     type must be "openai" (config validator rejects "ollama" as provider value)
-#   - agents.list starts empty — agents are added after provisioning by add-agent.sh
-#   - gateway binds to loopback only — never exposed on the VM network interface
-#   - __PORT__ placeholder is replaced with the workload's assigned port below
+  echo "[+] Applying juso configuration..."
+  sudo -u "$USER" bash -c "
+    export HOME=${USER_HOME}
 
-if [[ -f "$CONFIG" && -n "$EXISTING_PORT" ]]; then
-  echo "[skip] openclaw.json already exists (re-provision)"
-else
-  echo "[+] Writing openclaw.json from template (port ${PORT})..."
-  sed "s/__PORT__/${PORT}/" "$TEMPLATE" > "$CONFIG"
+    echo '  [1/18] models.mode = merge  (preserve onboard channel settings alongside juso overrides)'
+    openclaw config set models.mode merge
+
+    echo '  [2/18] agents.defaults.model.primary = ollama/${MODEL_ID}'
+    openclaw config set agents.defaults.model.primary 'ollama/${MODEL_ID}'
+
+    echo '  [3/18] agents.defaults.contextTokens = ${CONTEXT_TOKENS}  (match Ollama model context window)'
+    openclaw config set --strict-json agents.defaults.contextTokens ${CONTEXT_TOKENS}
+
+    echo '  [4/18] tools.profile = default  (coding profile includes apply_patch/image which are unavailable with Ollama)'
+    openclaw config set tools.profile default
+
+    echo '  [5/18] agents.defaults.memorySearch.enabled = true'
+    openclaw config set --strict-json agents.defaults.memorySearch.enabled true
+
+    echo '  [6/18] agents.defaults.memorySearch.provider = openai  (Ollama exposes an OpenAI-compatible embedding API)'
+    openclaw config set agents.defaults.memorySearch.provider openai
+
+    echo '  [7/18] agents.defaults.memorySearch.model = nomic-embed-text  (local embedding model pulled via Ollama)'
+    openclaw config set agents.defaults.memorySearch.model nomic-embed-text
+
+    echo '  [8/18] agents.defaults.memorySearch.remote.baseUrl = http://192.168.64.1:11434/v1/  (Ollama on host machine, reachable from VM)'
+    openclaw config set agents.defaults.memorySearch.remote.baseUrl 'http://192.168.64.1:11434/v1/'
+
+    echo '  [9/18] agents.defaults.memorySearch.remote.apiKey = ollama-local  (placeholder; local Ollama requires no auth)'
+    openclaw config set agents.defaults.memorySearch.remote.apiKey 'ollama-local'
+
+    echo '  [10/18] agents.defaults.memorySearch.query.hybrid.enabled = true  (blend vector similarity with keyword search)'
+    openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.enabled true
+
+    echo '  [11/18] agents.defaults.memorySearch.query.hybrid.vectorWeight = 0.7  (70% vector, 30% keyword)'
+    openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.vectorWeight 0.7
+
+    echo '  [12/18] agents.defaults.memorySearch.query.hybrid.textWeight = 0.3'
+    openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.textWeight 0.3
+
+    echo '  [13/18] agents.defaults.memorySearch.query.hybrid.candidateMultiplier = 4  (retrieve 4x candidates before reranking)'
+    openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.candidateMultiplier 4
+
+    echo '  [14/18] agents.defaults.memorySearch.store.path = ~/.openclaw/memory/{agentId}.sqlite  (per-agent SQLite store)'
+    openclaw config set agents.defaults.memorySearch.store.path '~/.openclaw/memory/{agentId}.sqlite'
+
+    echo '  [15/18] agents.defaults.compaction.mode = safeguard  (flush memory before compacting context)'
+    openclaw config set agents.defaults.compaction.mode safeguard
+
+    echo '  [16/18] agents.defaults.compaction.memoryFlush.enabled = true'
+    openclaw config set --strict-json agents.defaults.compaction.memoryFlush.enabled true
+
+    echo '  [17/18] agents.defaults.compaction.memoryFlush.softThresholdTokens = 4000  (trigger flush at 4000 tokens remaining)'
+    openclaw config set --strict-json agents.defaults.compaction.memoryFlush.softThresholdTokens 4000
+
+    echo '  [18/18] skills.allowBundled = []  (no bundled skills; juso controls tool access via workspace files)'
+    openclaw config set --strict-json skills.allowBundled '[]'
+  "
   chown "${USER}:${USER}" "$CONFIG"
+
+  echo "[+] Validating with openclaw doctor..."
+  sudo -u "$USER" bash -c "
+    export HOME=${USER_HOME}
+    export XDG_RUNTIME_DIR=/run/user/${USER_UID}
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
+    openclaw doctor --non-interactive
+  "
 fi
 
 # ─── Configure main agent workspace ──────────────────────────────────────────
@@ -306,10 +388,12 @@ fi
 echo ""
 echo "==> Workload '${WORKLOAD}' provisioned."
 echo ""
-echo "    Port     : ${PORT}"
-echo "    Internet : ${INTERNET}"
-echo "    Config   : ${CONFIG}"
-echo "    Service  : openclaw-gateway (user service for ${USER})"
+echo "    Port           : ${PORT}"
+echo "    Internet       : ${INTERNET}"
+echo "    Model          : ${MODEL_ID}"
+echo "    Context tokens : ${CONTEXT_TOKENS}"
+echo "    Config         : ${CONFIG}"
+echo "    Service        : openclaw-gateway (user service for ${USER})"
 echo ""
 echo "    Next steps:"
 echo "    1. Add agents    : sudo ~/juso/scripts/add-agent.sh ${WORKLOAD} <role>"

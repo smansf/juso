@@ -39,7 +39,7 @@ Install the OpenClaw CLI globally so that all workload user accounts created lat
 sudo npm install -g openclaw
 ```
 
-Do not run `openclaw onboard`. The onboarding wizard installs a gateway service under whichever user runs it — here, `juso-admin-vm`. That is the wrong account. Each workload needs its own gateway running under its own dedicated Linux user, which is what `provision-workload.sh` handles. Running onboard first would create a rogue gateway under the admin account with a default catch-all agent and no workload isolation.
+Do not run `openclaw onboard` as `juso-admin-vm`. Onboarding is performed by `provision-workload.sh`, which runs it as the workload user via `sudo -u`. Running it manually as `juso-admin-vm` would create a gateway under the wrong account with no workload isolation.
 
 Verify:
 
@@ -93,26 +93,22 @@ If either check fails, resolve it before continuing. OpenClaw will start but all
 
 ---
 
-## Base configuration template
+## Provisioning approach
 
-`~/juso/scripts/openclaw.json.template` on the VM (copied from `scripts/vm/openclaw.json.template` in the repo) is the base configuration that `provision-workload.sh` copies into each new workload user's `~/.openclaw/openclaw.json`. It is not used directly by `juso-admin-vm`.
+`provision-workload.sh` uses `openclaw onboard --non-interactive` to generate the base gateway config, then applies juso-specific values via `openclaw config set`. The generated config is always what the installed OpenClaw version produces — only the specific keys juso cares about are layered on top.
 
-Key decisions embedded in the template:
+See `scripts/vm/provision-workload.sh` for the full set of config values applied at provision time.
 
-- **Ollama at `192.168.64.1:11434`** — the AVF virtual network address. The VM reaches the Mac mini host here; LAN and internet addresses are blocked by UFW.
-- **`api: "ollama"`** — OpenClaw's native Ollama API mode. Tool calling is only reliable via the native API; the OpenAI-compatible `/v1` endpoint breaks tool calls with Ollama.
-- **`provider: "openai"` for memory search** — despite using Ollama, the config validator rejects `"ollama"` as a provider value. The memory search `baseUrl` retains `/v1/` — correct for the embeddings endpoint only, which is not affected by the tool-calling issue.
-- **`skills.allowBundled: []`** — disables the five bundled OpenClaw skills (healthcheck, node-connect, tmux, weather, skill-creator) which are irrelevant for juso workloads and consume ~700 context tokens per session. Individual workloads can override this if a bundled skill is genuinely needed.
-- **`bind: "loopback"`** — the gateway only listens on `localhost`. It is never exposed on the VM's network interface.
-- **`port: __PORT__`** — placeholder substituted by `provision-workload.sh` with the workload's assigned port.
-- **`agents.list: []`** — no agents defined at provision time. Agents are added by `add-agent.sh` after the workload is running.
+## Expected secrets audit findings
 
-Web search credentials (`BRAVE_API_KEY` or equivalent) are not part of the template — they are configured per-workload after provisioning. See the provisioning guide for details.
+Running `openclaw secrets audit` on any provisioned workload will always report 5 plaintext findings. These are not real secrets and do not need to be resolved:
 
----
+| Finding | Value | Why ignorable |
+|---|---|---|
+| `agents.defaults.memorySearch.remote.apiKey` | `ollama-local` | Placeholder string; local Ollama requires no auth |
+| `gateway.auth.token` | (random hex) | Local-only token; never leaves the VM |
+| `models.providers.ollama.apiKey` | `OLLAMA_API_KEY` | Placeholder; local Ollama requires no auth |
+| `profiles.ollama:default.key` (main) | (same placeholder) | Ollama auth profile placeholder |
+| `profiles.ollama:default.key` (prospector) | (same placeholder) | Ollama auth profile placeholder |
 
-## What comes next
-
-OpenClaw is now installed system-wide. Nothing runs yet. The next step is workload provisioning — see the provisioning guide — which creates a Linux user, copies and customises the config template, and installs the per-workload gateway service.
-
-Proceed to the provisioning guide.
+After configuring the Brave Search API key, run the audit to confirm the Brave key is **not** in the findings. If it appears there, it was entered directly into the wizard rather than read from `.env` and needs to be moved to a SecretRef via `openclaw secrets configure`.

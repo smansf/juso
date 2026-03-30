@@ -108,6 +108,24 @@ Re-validate after any change to the platform: OpenClaw upgrade, UFW rule change,
 
 ## Maintenance
 
+### Updating Ollama
+
+1. Stop all workloads from the MacBook: `juso-stop-workload <workload>` for each.
+2. Connect to the mini via Screen Sharing as `juso`.
+3. Click the Ollama menu bar icon → **Restart to Update**. When prompted for admin credentials, enter the `jusoadmin` password. Wait for Ollama to restart and the menu bar icon to reappear.
+4. Open a Terminal on the mini as `juso` and run `configure-ollama.sh` to re-register the LaunchAgent with the new binary:
+   ```bash
+   ~/scripts/configure-ollama.sh
+   ```
+5. Disable Ollama in App Background Activity if re-enabled by the update (System Settings → General → Login Items & Extensions → App Background Activity).
+6. Verify the binding:
+   ```bash
+   lsof -i :11434   # should show ollama LISTEN on 192.168.64.1:11434
+   ```
+7. Restart all workloads from the MacBook: `juso-start-workload <workload>` for each.
+
+`configure-ollama.sh` must be re-run after every Ollama update. The update restarts Ollama under its default binding (`127.0.0.1`); `configure-ollama.sh` re-registers the LaunchAgent that overrides this with `192.168.64.1:11434`.
+
 ### Updating OpenClaw
 
 OpenClaw updates are applied deliberately, not automatically — new versions can introduce new attack surfaces alongside patches.
@@ -118,8 +136,9 @@ OpenClaw updates are applied deliberately, not automatically — new versions ca
    ```bash
    openclaw doctor --fix
    ```
-4. Review `scripts/vm/openclaw.json.template` against the updated schema. `openclaw doctor --fix` corrects live configs but does not update the template — update it manually to keep it canonical and match what `doctor --fix` produces.
-5. Run a full validation audit. Do not resume agent workloads until CERTIFIED.
+4. Run a full validation audit. Do not resume agent workloads until CERTIFIED.
+
+TODO: The upgrade procedure above should be scripted as `scripts/vm/upgrade-openclaw.sh` before the next upgrade is performed. The script should handle the UFW rule open/close, the `npm install`, and the `doctor --fix` call in sequence, and must close the firewall rules even if an intermediate step fails.
 
 ### Deploying script updates to the VM
 
@@ -258,7 +277,7 @@ juso-stop-workload <workload>
 juso-start-workload <workload>
 ```
 
-**Root cause**: `openclaw gateway install` writes a default config with `bind: lan`, overwriting the template-written config. Fixed in `provision-workload.sh` (template is now written after `gateway install`). Workloads provisioned before this fix need the manual correction above.
+**Root cause**: `openclaw gateway install` writes a default config with `bind: lan`, overwriting the template-written config. Fixed in `provision-workload.sh` (provisioning now uses `openclaw onboard --gateway-bind loopback` directly). Workloads provisioned before this fix need the manual correction above.
 
 ### "Device signature expired" (gateway auth failure)
 

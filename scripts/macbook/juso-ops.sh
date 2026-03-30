@@ -68,10 +68,10 @@ function juso-list() {
 }
 
 # Provision a new workload.
-# Usage: juso-provision [--internet=none|open] <workload-name>
+# Usage: juso-provision [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>
 function juso-provision() {
   if [[ -z "${1:-}" ]]; then
-    echo "Usage: juso-provision [--internet=none|open] <workload-name>"
+    echo "Usage: juso-provision [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>"
     return 1
   fi
   ssh -t vm "sudo ~/juso/scripts/provision-workload.sh $*"
@@ -454,7 +454,7 @@ function juso-help() {
   echo ""
   echo "  Workloads:"
   echo "    juso-list                                       — list workloads and ports"
-  echo "    juso-provision [--internet=none|open] <name>   — provision new workload"
+  echo "    juso-provision [--internet=none|open] [--model-id <model>] [--context-tokens <n>] <name>   — provision new workload"
   echo "    juso-destroy <workload>                         — destroy workload and all data"
   echo "    juso-start-workload <workload>                  — start workload gateway"
   echo "    juso-stop-workload <workload>                   — stop workload gateway"

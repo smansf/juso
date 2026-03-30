@@ -120,7 +120,7 @@ Each workload's OpenClaw gateway runs as a systemd user service under its Linux 
 
 ### Provisioning a new workload
 
-`provision-workload.sh` creates: a dedicated Linux user, installs the OpenClaw gateway service via `openclaw gateway install`, writes an initial `openclaw.json` (gateway config, port assignment, model endpoint — no agent definitions), and assigns a unique port and `OPENCLAW_STATE_DIR`. Agents are added separately with `add-agent.sh`. The workload is ready to receive agents after provisioning.
+`provision-workload.sh` creates: a dedicated Linux user, provisions the OpenClaw gateway via `openclaw onboard --non-interactive`, writes an initial `openclaw.json` (gateway config, port assignment, model endpoint — no agent definitions), and assigns a unique port and `OPENCLAW_STATE_DIR`. Agents are added separately with `add-agent.sh`. The workload is ready to receive agents after provisioning.
 
 The provisioning sequence uses `set -e` — any failed command halts immediately without attempting automated rollback. Partial state is left visible for debugging. `destroy-workload.sh` handles deprovisioning. Each workload also gets a `~/shared/` directory for work product files written by agents and synced by the operator.
 

@@ -20,17 +20,23 @@ Run everything in this guide on the VM as `juso-admin-vm`.
 Run from the repo root:
 
 ```bash
-sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] <workload-name>
+sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>
 ```
 
 The workload name becomes the suffix of the Linux user — `research` creates `juso-research`. Naming rules: lowercase letters, digits, and hyphens only; must start with a letter; 31 characters maximum.
+
+`--model-id` and `--context-tokens` are required. They specify the Ollama model and context window size for all agents in the workload. The right values depend on which model you have pulled in Ollama and your hardware. Example:
+
+```bash
+sudo ~/juso/scripts/provision-workload.sh --internet=open --model-id qwen3:30b --context-tokens 32768 research
+```
 
 The script assigns a port automatically, starting at 18789 and incrementing for each additional workload. The assigned port is stored in the workload's `openclaw.json` and read at runtime by `juso-workload-list` — the helper that `juso-list`, `juso-dashboard`, and the status functions all use.
 
 By default, workloads have no internet access (`--internet=none`). Workloads that need to fetch web content or call external APIs should be provisioned with `--internet=open`, which adds a per-UID iptables rule allowing all outbound traffic for that workload's Linux user. The internet setting is fixed at provision time — to change it, destroy and re-provision. Example:
 
 ```bash
-sudo ~/juso/scripts/provision-workload.sh --internet=open research
+sudo ~/juso/scripts/provision-workload.sh --internet=open --model-id qwen3:30b --context-tokens 32768 research
 ```
 
 If the script fails partway through, re-running it is safe. Each step checks whether it has already been completed and skips if so.
@@ -139,7 +145,7 @@ juso-dashboard <workload>
 
 | Task | Command |
 |------|---------|
-| Provision workload | `sudo ~/juso/scripts/provision-workload.sh [--internet=none\|open] <workload>` |
+| Provision workload | `sudo ~/juso/scripts/provision-workload.sh [--internet=none\|open] --model-id <model> --context-tokens <n> <workload>` |
 | Destroy workload | `sudo ~/juso/scripts/destroy-workload.sh <workload>` |
 | Add agent | `sudo ~/juso/scripts/add-agent.sh <workload> <agent>` |
 | Remove agent | `sudo ~/juso/scripts/remove-agent.sh <workload> <agent>` |
