@@ -410,7 +410,7 @@ function juso-status() {
   echo ""
   echo "── Ollama (Mac mini) ───────────────────────────────"
   ssh -o ConnectTimeout=3 mini \
-    "pgrep -x ollama > /dev/null && echo '✓ running' || echo '✗ stopped'" \
+    "curl -sf http://localhost:11434/api/version > /dev/null && echo '✓ running' || echo '✗ stopped (api not responding)'" \
     2>/dev/null || echo "✗ mini unreachable"
 
   echo ""
