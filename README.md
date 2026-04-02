@@ -2,11 +2,25 @@
 
 **重層** (*jūsō*) — multilayered, stratified.
 
-A defense-in-depth platform for running OpenClaw agents on personal hardware.
+**juso** is a defense-in-depth system for running OpenClaw agents on personal hardware. It provides layered isolation for autonomous agents operating on a local machine, reducing the risk of data exfiltration or system compromise if an agent behaves unexpectedly or is malicious.
 
-OpenClaw agents execute tools, browse the web, and interact with external services on your behalf. Running them directly on a personal machine means a compromised agent has direct access to your files, credentials, and network. juso wraps OpenClaw in independent isolation layers (network, hypervisor, OS) so that a compromised agent faces a chain of distinct barriers rather than a single point of failure.
+OpenClaw agents execute tools, browse the web, and interact with external services on your behalf. Running them directly on a personal machine means a compromised agent potentially has access to your files, credentials, and network. juso addresses this by wrapping OpenClaw in independent isolation layers (network, hypervisor, OS) so that a compromised agent faces a chain of distinct barriers rather than a single point of failure. The goal is not to rely on any single boundary, but to ensure that failure of one layer does not compromise the system as a whole.
 
-juso is the platform layer: isolation, scripts, and validation. Your agents live in separate repos and deploy on top, free to use the full range of OpenClaw capabilities.
+juso provides the isolation, provisioning, and validation around OpenClaw. Your agents live in separate repos and deploy on top, free to use the full range of OpenClaw capabilities.
+
+---
+
+## What juso demonstrates
+
+juso is an exploration of how to run local AI agents with stronger isolation and clearer operational boundaries. It brings together a set of practical techniques (VM separation, per-user isolation, network controls, and adversarial validation) into a cohesive system for working with autonomous agents on personal hardware.
+
+The project reflects an approach to treating agent execution as something that benefits from layered containment and ongoing verification, rather than a single protective mechanism. It also explores what it looks like to operate a persistent “agent host” with controlled access and explicit boundaries between workloads.
+
+This work is most relevant to:
+
+- local AI and agent development
+- experimentation with autonomous systems
+- environments where data sensitivity or system integrity is a concern
 
 ---
 
@@ -60,9 +74,9 @@ Setup is detailed but fully scripted. Follow the guides in order:
 
 After setup, run the validation agent to confirm the isolation layers are holding. Re-run it after any infrastructure change.
 
-| Path | Contents |
-|------|----------|
-| `design/` | Requirements and architecture documentation |
-| `guides/` | Step-by-step setup and operational procedures |
-| `scripts/` | Infrastructure scripts for the Mac mini host, VM, and MacBook |
-| `validation/` | Validation agent and audit framework |
+| Path            | Contents                                                      |
+| --------------- | ------------------------------------------------------------- |
+| `design/`     | Requirements and architecture documentation                   |
+| `guides/`     | Step-by-step setup and operational procedures                 |
+| `scripts/`    | Infrastructure scripts for the Mac mini host, VM, and MacBook |
+| `validation/` | Validation agent and audit framework                          |
