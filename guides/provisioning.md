@@ -23,7 +23,7 @@ Run from the repo root:
 sudo ~/juso/scripts/provision-workload.sh [--internet=none|open] --model-id <model> --context-tokens <n> <workload-name>
 ```
 
-The workload name becomes the suffix of the Linux user — `research` creates `juso-research`. Naming rules: lowercase letters, digits, and hyphens only; must start with a letter; 31 characters maximum.
+The workload name is used directly as the Linux username. Naming rules: lowercase letters, digits, and hyphens only; must start with a letter; 31 characters maximum.
 
 `--model-id` and `--context-tokens` are required. They specify the Ollama model and context window size for all agents in the workload. The right values depend on which model you have pulled in Ollama and your hardware. Example:
 
@@ -45,12 +45,13 @@ If the script fails partway through, re-running it is safe. Each step checks whe
 
 | Item | Location |
 |------|----------|
-| Linux user | `juso-<workload>` |
-| OpenClaw config | `/home/juso-<workload>/.openclaw/openclaw.json` |
-| Gateway service | `/home/juso-<workload>/.config/systemd/user/openclaw-gateway.service` |
+| Linux user | `<workload>` |
+| OpenClaw config | `/home/<workload>/.openclaw/openclaw.json` (owned `root:<workload>` mode `640`) |
+| Gateway service | `/home/<workload>/.config/systemd/user/openclaw-gateway.service` |
+| `scripts/` skeleton | `/home/<workload>/scripts/{agent,ops,lib}/` with kernel ACL (see [operations.md](operations.md#scriptsagentopslib-kernel-acl)) |
 | `audit.sh` | `/usr/local/bin/audit.sh` (overwritten each provision) |
 
-`juso-ctl`, `juso-workload-list`, and the sudoers rules are installed by `install-vm-infrastructure.sh`, which is run as part of macbook-setup.md Part 8.
+`juso-ctl`, `juso-workload-list`, `juso-config-set`, `juso-rsync-scripts`, `juso-ops-exec`, `audit-acl.sh`, and the sudoers rules are installed by `install-vm-infrastructure.sh`, which is run as part of macbook-setup.md Part 8.
 
 ### Verify
 
@@ -59,31 +60,26 @@ If the script fails partway through, re-running it is safe. Each step checks whe
 sudo juso-workload-list
 
 # User exists
-id juso-<workload>
+id <workload>
 
 # Config is present and port is correct
-cat /home/juso-<workload>/.openclaw/openclaw.json | grep port
+cat /home/<workload>/.openclaw/openclaw.json | grep port
 
 # Service file installed
-ls /home/juso-<workload>/.config/systemd/user/openclaw-gateway.service
+ls /home/<workload>/.config/systemd/user/openclaw-gateway.service
 
 # Linger enabled
-loginctl show-user juso-<workload> | grep Linger
+loginctl show-user <workload> | grep Linger
 ```
 
 The gateway service is installed but not started. An empty gateway (no agents) is harmless but pointless — add at least one agent before starting.
 
 **Web search credentials (if needed)**
 
-If the workload will use `web_search`, configure the search provider key before starting the gateway. OpenClaw auto-detects Brave Search if `BRAVE_API_KEY` is present in the environment. Set it in the workload user's OpenClaw env file and let OpenClaw wire it up:
+If the workload will use `web_search`, write the Brave Search API key before starting the gateway. OpenClaw auto-detects it from `~/.openclaw/.env`:
 
 ```bash
-sudo -i -u juso-<workload>
-echo "BRAVE_API_KEY=<key>" >> ~/.openclaw/.env
-openclaw configure --section web   # interactive — confirm Brave, enter key
-openclaw secrets configure          # convert to SecretRef (recommended)
-openclaw secrets audit              # verify no plaintext in openclaw.json
-exit
+juso-write-secret <workload> BRAVE_API_KEY
 ```
 
 Obtain a Brave Search API key at `brave.com/search/api/` (free tier: $5/month credit, ~1,000 queries/month). Set a usage cap in the Brave dashboard.
@@ -100,7 +96,7 @@ sudo ~/juso/scripts/add-agent.sh <workload-name> <agent-name>
 
 **Naming convention:** agent IDs use the role name only — no workload prefix. The workload context is already provided by the gateway, the Linux user account, and the workload argument in all juso commands. The role name is a noun describing what the agent does (e.g. `-or`/`-er` suffix: `collector`, `auditor`, `tracker`). Examples: `collector`, `auditor`, `tracker`.
 
-**The `main` agent** is OpenClaw's reserved default agent. It is configured automatically at provision time with its workspace at `~/.openclaw/workspace/main/`. Do not add it manually via `add-agent.sh` — doing so will error. Deploy its workspace files with `juso-push-agent <workload> main`.
+**The `main` agent** is OpenClaw's reserved default agent. It is configured automatically at provision time with its workspace at `~/.openclaw/workspace/main/`. Do not add it manually via `add-agent.sh` — doing so will error. Deploy its workspace files with `juso-push-agent <workload> main`. If agent files are organised under a subdirectory (e.g. `agents/`), pass `--agents-dir <subdir>`: `juso-push-agent <workload> main --agents-dir agents`.
 
 Note: the `validation-auditor` agent was created under the previous `<workload>-<role>` convention and has not been renamed.
 
@@ -109,11 +105,53 @@ This scaffolds the agent's workspace directory, seeds the bootstrap prompt files
 See the agent's workspace files after creation:
 
 ```bash
-ls /home/juso-<workload>/.openclaw/workspace/<agent-name>/
+ls /home/<workload>/.openclaw/workspace/<agent-name>/
 # SOUL.md    AGENTS.md    USER.md    MEMORY.md    BOOTSTRAP.md
 ```
 
 These files define who the agent is and how it behaves. Edit them before starting the gateway — they are loaded at session start and injected into the system prompt.
+
+---
+
+## Part 2b: Configure Telegram (optional)
+
+If the workload uses Telegram as a channel, configure it after adding agents and before starting the gateway.
+
+**Write the token first.** `juso-configure-telegram` requires `TELEGRAM_BOT_TOKEN` to already be
+set — it enforces this as a precondition and fails fast before writing anything to `openclaw.json`.
+Set the token with:
+
+```bash
+juso-write-secret <workload> TELEGRAM_BOT_TOKEN
+```
+
+This prevents the gateway from starting in a broken state: OpenClaw 2026.4.8+ hard-fails at startup
+if a Telegram SecretRef is configured but the token is absent from `~/.openclaw/.env`.
+
+```bash
+juso-configure-telegram <workload> \
+  --allowlist "<space-separated Telegram user IDs>" \
+  --groups "<space-separated group IDs>" \
+  [--ack-reaction <emoji>]
+```
+
+Example:
+
+```bash
+juso-configure-telegram research \
+  --allowlist "123456789 987654321" \
+  --groups "-1001234567890" \
+  --ack-reaction "👀"
+```
+
+`--ack-reaction` is optional but recommended: the bot reacts to messages to confirm receipt while processing.
+
+After running the command, restart the gateway for the change to take effect:
+
+```bash
+juso-stop-workload <workload>
+juso-start-workload <workload>
+```
 
 ---
 

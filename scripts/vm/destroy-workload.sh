@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# destroy-workload.sh
-# Completely deprovisions a juso workload.
-# Usage: sudo ~/juso/scripts/destroy-workload.sh <workload-name>
-# Run from the repo root as juso-admin-vm.
-#
-# Stops the gateway, uninstalls the systemd service via the OpenClaw CLI,
-# stops the user session, deletes the Linux user and home directory (including
-# all agent workspaces and session history), and removes any iptables rules.
-#
-# This operation is irreversible.
+# destroy-workload.sh — Completely deprovision a juso workload. Stops the
+# gateway, uninstalls the systemd service, stops the user session, deletes
+# the Linux user and home directory (workspaces, session history), and
+# removes iptables rules. Irreversible. Run as juso-admin-vm via sudo from
+# the repo root.
 
 set -euo pipefail
 
 # ─── Usage ───────────────────────────────────────────────────────────────────
 
-WORKLOAD="${1:-}"
+FORCE=false
+WORKLOAD=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+    *) WORKLOAD="$arg" ;;
+  esac
+done
 
 if [[ -z "$WORKLOAD" ]]; then
-  echo "Usage: sudo ~/juso/scripts/destroy-workload.sh <workload-name>"
+  echo "Usage: sudo ~/juso/scripts/destroy-workload.sh [--force] <workload-name>"
   echo "Example: sudo ~/juso/scripts/destroy-workload.sh research"
+  echo "         sudo ~/juso/scripts/destroy-workload.sh --force research"
   exit 1
 fi
 
@@ -29,7 +33,7 @@ if ! [[ "$WORKLOAD" =~ ^[a-z][a-z0-9-]{0,30}$ ]]; then
   exit 1
 fi
 
-USER="juso-${WORKLOAD}"
+USER="${WORKLOAD}"
 
 # ─── Check workload exists ───────────────────────────────────────────────────
 
@@ -55,10 +59,15 @@ echo "    - iptables rules (if any)"
 echo ""
 echo "    This cannot be undone."
 echo ""
-read -rp "    Type the workload name to confirm: " CONFIRM
-if [[ "$CONFIRM" != "$WORKLOAD" ]]; then
-  echo "Cancelled."
-  exit 0
+
+if [[ "$FORCE" == false ]]; then
+  read -rp "    Type the workload name to confirm: " CONFIRM
+  if [[ "$CONFIRM" != "$WORKLOAD" ]]; then
+    echo "Cancelled."
+    exit 0
+  fi
+else
+  echo "    (--force: skipping confirmation)"
 fi
 
 echo ""

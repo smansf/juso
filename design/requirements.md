@@ -56,11 +56,13 @@ These are the security boundaries juso provides. Each is enforced independently 
 
 **Internet access**: Internet access is denied by default for all workloads. Workloads that need internet (web research, API calls) are provisioned with `--internet=open`, which adds a per-UID iptables `--uid-owner` ACCEPT rule. Workloads provisioned with `--internet=none` (the default) cannot make any outbound connections beyond Ollama. The internet setting is fixed at provision time — to change it, destroy and re-provision the workload. Per-agent internet control within a workload is not feasible (agents share a Linux user); different internet tiers require different workloads.
 
-**Workload-to-workload isolation**: Each workload gets its own Linux user account. The kernel prevents one workload from accessing another's files, session data, or credentials. Agents within the same workload share a user account by design - that's how OpenClaw's multi-agent collaboration works.
+**Workload-to-workload isolation**: Each workload gets its own Linux user account; membership in the `juso-workloads` Linux group is the system of record for what constitutes a workload. The kernel prevents one workload from accessing another's files, session data, or credentials. Agents within the same workload share a user account by design - that's how OpenClaw's multi-agent collaboration works.
 
 **No runtime capability escalation**: An agent cannot expand its own tool access, network permissions, or filesystem scope at runtime. Capability is fixed at provisioning time in `openclaw.json` and the agent process has no write access to that file.
 
 **Skill immutability during runs**: An agent cannot modify its own skill files during a run. Skill directories are owned by the operator account and are read-only to the agent process.
+
+**Intra-workload privilege separation**: Within a workload, ops-tier scripts (`~/scripts/ops/`) are root-owned with mode 750 — the workload user cannot read, execute, or list them. Access to ops-tier scripts is gated through `juso-ops-exec`, which enforces caller group membership, path confinement, and root:root ownership of the target. The workload user cannot write its own `openclaw.json` or `exec-approvals.json`. These boundaries are kernel-enforced and hold regardless of agent behavior or OpenClaw configuration.
 
 **Ollama scoped to the VM interface**: The Ollama service on the Mac mini host binds only to `192.168.64.1`, making it reachable from the VM and nowhere else on the local network.
 
@@ -92,6 +94,8 @@ The platform supports a defined set of operations for managing workloads and age
 
 **Skill management**: Skills are installed manually by the operator after review. No skills are installed from ClawHub or any community source without the operator reading the skill content first. The operator accepts responsibility for the behavior any installed skill directs the agent to perform.
 
+**Secrets management**: The operator can write secrets (API keys, tokens) to a workload's `~/.openclaw/.env` file via `juso-write-secret` and verify that a key is set via `juso-check-secret`. Secrets are never echoed to the terminal during entry. The `.env` file is readable by the workload user for OpenClaw to source as environment configuration, and is not readable by other workloads.
+
 ---
 
 ## 4. Validation
@@ -106,7 +110,7 @@ The validation framework certifies that the isolation layers are working as expe
 
 **Longitudinal audit trail**: The validation agent's MEMORY.md accumulates a history of validation runs — what was tested, what passed, what failed, and when. This provides a record of the platform's security posture over time and makes regressions visible.
 
-**Deterministic audit execution**: A shell script runs the actual validation tests as the unprivileged validation user. The script determines pass/fail and returns structured data - the validation agent just writes the human-readable report. This keeps the AI out of the pass/fail decisions.
+**Deterministic audit execution**: Validation runs two distinct tools. `audit-acl.sh` performs a static ownership and mode check against the expected kernel-ACL matrix, run by the operator. `audit.sh` performs behavioral checks as the unprivileged validation user, including the `acl-behavioural` layer — negative checks that prove the ACL boundary holds from inside the workload. Both scripts determine pass/fail deterministically and return structured data; the validation agent writes the human-readable report. This keeps the AI out of the pass/fail decisions.
 
 **Intra-workload coordination**: The validation setup must verify that agents within the same workload can share workspace files — confirming that intra-workload collaboration works as expected. This is distinct from isolation testing: it confirms the platform does not accidentally break the sharing that multi-agent workloads depend on.
 

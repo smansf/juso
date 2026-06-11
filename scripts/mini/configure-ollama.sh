@@ -1,21 +1,9 @@
 #!/bin/bash
-# configure-ollama.sh
-#
-# Configures Ollama to run as a persistent LaunchAgent bound to
-# 192.168.64.1:11434 (UTM virtual network interface), so the Linux VM
-# can reach it while keeping it off the local network.
-#
-# Replaces the Ollama.app GUI auto-start with a direct 'ollama serve'
-# LaunchAgent. OLLAMA_HOST is embedded directly in the plist rather than
-# set via launchctl setenv — this survives Ollama updates and app restarts.
-#
-# Run as juso. Safe to re-run after Ollama updates.
-# Usage: bash ~/juso/scripts/configure-ollama.sh
-#
-# After running:
-#   - Remove Ollama.app from System Settings → General → Login Items
-#     (the LaunchAgent replaces it — having both causes port conflicts)
-#   - Do not open the Ollama.app manually while the LaunchAgent is active
+# configure-ollama.sh — Configure Ollama as a persistent LaunchAgent bound to
+# 192.168.64.1:11434 (UTM virtual network interface) so the Linux VM can reach
+# it while keeping it off the local network. Replaces Ollama.app GUI auto-start;
+# OLLAMA_HOST is embedded in the plist (survives Ollama updates and app
+# restarts). Run as juso; safe to re-run.
 
 set -euo pipefail
 
@@ -55,7 +43,7 @@ mkdir -p "$PLIST_DIR"
 # and is not affected by Ollama GUI updates resetting the environment.
 
 echo "Writing LaunchAgent: $NEW_PLIST"
-cat > "$NEW_PLIST" <<EOF
+cat >"$NEW_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -71,6 +59,8 @@ cat > "$NEW_PLIST" <<EOF
     <dict>
         <key>OLLAMA_HOST</key>
         <string>${OLLAMA_HOST_VALUE}</string>
+        <key>OLLAMA_NUM_CTX</key>
+        <string>131072</string>
         <key>HOME</key>
         <string>${HOME}</string>
     </dict>

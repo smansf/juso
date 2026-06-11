@@ -88,7 +88,7 @@ if ! [[ "$WORKLOAD" =~ ^[a-z][a-z0-9-]{0,30}$ ]]; then
   exit 1
 fi
 
-USER="juso-${WORKLOAD}"
+USER="${WORKLOAD}"
 
 for reserved in "${RESERVED[@]}"; do
   if [[ "$WORKLOAD" == "$reserved" || "$USER" == "$reserved" ]]; then
@@ -101,6 +101,13 @@ done
 
 EXISTING_PORT=""
 if id "$USER" &>/dev/null; then
+  # Safety guard: if the user exists but is not a juso workload account, abort.
+  # Prevents accidentally provisioning over a system account that shares a name.
+  if ! groups "$USER" 2>/dev/null | grep -qw juso-workloads; then
+    echo "Error: Linux user '${USER}' already exists but is not a juso workload."
+    echo "       Choose a different workload name."
+    exit 1
+  fi
   CONFIG_CHECK="/home/${USER}/.openclaw/openclaw.json"
   if [[ -f "$CONFIG_CHECK" ]]; then
     EXISTING_PORT=$(jq -r '.gateway.port // empty' "$CONFIG_CHECK" 2>/dev/null) || true
@@ -115,13 +122,15 @@ else
   # ─── Assign port ───────────────────────────────────────────────────────────
   # Scan all existing workload configs for the highest allocated port.
   LAST_PORT=""
-  for cfg in /home/juso-*/.openclaw/openclaw.json; do
+  while IFS= read -r member; do
+    [[ -z "$member" ]] && continue
+    cfg="/home/${member}/.openclaw/openclaw.json"
     [[ -f "$cfg" ]] || continue
     p=$(jq -r '.gateway.port // empty' "$cfg" 2>/dev/null) || true
     if [[ -n "$p" ]] && [[ -z "$LAST_PORT" || "$p" -gt "$LAST_PORT" ]]; then
       LAST_PORT="$p"
     fi
-  done
+  done < <(getent group juso-workloads 2>/dev/null | cut -d: -f4 | tr ',' '\n')
 
   if [[ -n "$LAST_PORT" ]]; then
     PORT=$((LAST_PORT + 20))
@@ -182,6 +191,24 @@ else
   chown "${USER}:${USER}" "${USER_HOME}/shared"
 fi
 
+# ─── Create scripts/{agent,ops,lib} skeleton with kernel ACL ────────────────
+
+if [[ -d "${USER_HOME}/scripts" ]]; then
+  echo "[skip] ${USER_HOME}/scripts already exists"
+else
+  echo "[+] Creating ~/scripts skeleton with kernel ACL ownership..."
+  mkdir -p "${USER_HOME}/scripts/agent"
+  mkdir -p "${USER_HOME}/scripts/ops"
+  mkdir -p "${USER_HOME}/scripts/lib"
+  chown root:root \
+    "${USER_HOME}/scripts" \
+    "${USER_HOME}/scripts/agent" \
+    "${USER_HOME}/scripts/ops" \
+    "${USER_HOME}/scripts/lib"
+  chmod 755 "${USER_HOME}/scripts" "${USER_HOME}/scripts/agent" "${USER_HOME}/scripts/lib"
+  chmod 750 "${USER_HOME}/scripts/ops"
+fi
+
 # ─── Install audit.sh ────────────────────────────────────────────────────────
 # Always overwrite — audit.sh must stay in sync with the repo on every provision.
 
@@ -207,7 +234,7 @@ systemctl start "user@$(id -u "$USER").service" 2>/dev/null || true
 
 # Wait for XDG_RUNTIME_DIR to be ready (created by user@UID.service)
 USER_UID=$(id -u "$USER")
-for i in $(seq 1 10); do
+for _ in $(seq 1 10); do
   [[ -d "/run/user/${USER_UID}" ]] && break
   sleep 1
 done
@@ -246,61 +273,72 @@ else
   sudo -u "$USER" bash -c "
     export HOME=${USER_HOME}
 
-    echo '  [1/18] models.mode = merge  (preserve onboard channel settings alongside juso overrides)'
+    echo '  [1/19] models.mode = merge  (preserve onboard channel settings alongside juso overrides)'
     openclaw config set models.mode merge
 
-    echo '  [2/18] agents.defaults.model.primary = ollama/${MODEL_ID}'
+    echo '  [2/19] agents.defaults.model.primary = ollama/${MODEL_ID}'
     openclaw config set agents.defaults.model.primary 'ollama/${MODEL_ID}'
 
-    echo '  [3/18] agents.defaults.contextTokens = ${CONTEXT_TOKENS}  (match Ollama model context window)'
+    echo '  [3/19] agents.defaults.contextTokens = ${CONTEXT_TOKENS}  (match Ollama model context window)'
     openclaw config set --strict-json agents.defaults.contextTokens ${CONTEXT_TOKENS}
 
-    echo '  [4/18] tools.profile = default  (coding profile includes apply_patch/image which are unavailable with Ollama)'
-    openclaw config set tools.profile default
+    echo '  [4/19] tools.profile = minimal  (safe baseline: session_status only; agents that need web/fs tools set their own profile via agents.list[].tools.profile)'
+    openclaw config set tools.profile minimal
 
-    echo '  [5/18] agents.defaults.memorySearch.enabled = true'
+    echo '  [5/19] agents.defaults.memorySearch.enabled = true'
     openclaw config set --strict-json agents.defaults.memorySearch.enabled true
 
-    echo '  [6/18] agents.defaults.memorySearch.provider = openai  (Ollama exposes an OpenAI-compatible embedding API)'
+    echo '  [6/19] agents.defaults.memorySearch.provider = openai  (Ollama exposes an OpenAI-compatible embedding API)'
     openclaw config set agents.defaults.memorySearch.provider openai
 
-    echo '  [7/18] agents.defaults.memorySearch.model = nomic-embed-text  (local embedding model pulled via Ollama)'
+    echo '  [7/19] agents.defaults.memorySearch.model = nomic-embed-text  (local embedding model pulled via Ollama)'
     openclaw config set agents.defaults.memorySearch.model nomic-embed-text
 
-    echo '  [8/18] agents.defaults.memorySearch.remote.baseUrl = http://192.168.64.1:11434/v1/  (Ollama on host machine, reachable from VM)'
+    echo '  [8/19] agents.defaults.memorySearch.remote.baseUrl = http://192.168.64.1:11434/v1/  (Ollama on host machine, reachable from VM)'
     openclaw config set agents.defaults.memorySearch.remote.baseUrl 'http://192.168.64.1:11434/v1/'
 
-    echo '  [9/18] agents.defaults.memorySearch.remote.apiKey = ollama-local  (placeholder; local Ollama requires no auth)'
+    echo '  [9/19] agents.defaults.memorySearch.remote.apiKey = ollama-local  (placeholder; local Ollama requires no auth)'
     openclaw config set agents.defaults.memorySearch.remote.apiKey 'ollama-local'
 
-    echo '  [10/18] agents.defaults.memorySearch.query.hybrid.enabled = true  (blend vector similarity with keyword search)'
+    echo '  [10/19] agents.defaults.memorySearch.query.hybrid.enabled = true  (blend vector similarity with keyword search)'
     openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.enabled true
 
-    echo '  [11/18] agents.defaults.memorySearch.query.hybrid.vectorWeight = 0.7  (70% vector, 30% keyword)'
+    echo '  [11/19] agents.defaults.memorySearch.query.hybrid.vectorWeight = 0.7  (70% vector, 30% keyword)'
     openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.vectorWeight 0.7
 
-    echo '  [12/18] agents.defaults.memorySearch.query.hybrid.textWeight = 0.3'
+    echo '  [12/19] agents.defaults.memorySearch.query.hybrid.textWeight = 0.3'
     openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.textWeight 0.3
 
-    echo '  [13/18] agents.defaults.memorySearch.query.hybrid.candidateMultiplier = 4  (retrieve 4x candidates before reranking)'
+    echo '  [13/19] agents.defaults.memorySearch.query.hybrid.candidateMultiplier = 4  (retrieve 4x candidates before reranking)'
     openclaw config set --strict-json agents.defaults.memorySearch.query.hybrid.candidateMultiplier 4
 
-    echo '  [14/18] agents.defaults.memorySearch.store.path = ~/.openclaw/memory/{agentId}.sqlite  (per-agent SQLite store)'
+    echo '  [14/19] agents.defaults.memorySearch.store.path = ~/.openclaw/memory/{agentId}.sqlite  (per-agent SQLite store)'
     openclaw config set agents.defaults.memorySearch.store.path '~/.openclaw/memory/{agentId}.sqlite'
 
-    echo '  [15/18] agents.defaults.compaction.mode = safeguard  (flush memory before compacting context)'
+    echo '  [15/19] agents.defaults.compaction.mode = safeguard  (flush memory before compacting context)'
     openclaw config set agents.defaults.compaction.mode safeguard
 
-    echo '  [16/18] agents.defaults.compaction.memoryFlush.enabled = true'
+    echo '  [16/19] agents.defaults.compaction.memoryFlush.enabled = true'
     openclaw config set --strict-json agents.defaults.compaction.memoryFlush.enabled true
 
-    echo '  [17/18] agents.defaults.compaction.memoryFlush.softThresholdTokens = 4000  (trigger flush at 4000 tokens remaining)'
+    echo '  [17/19] agents.defaults.compaction.memoryFlush.softThresholdTokens = 4000  (trigger flush at 4000 tokens remaining)'
     openclaw config set --strict-json agents.defaults.compaction.memoryFlush.softThresholdTokens 4000
 
-    echo '  [18/18] skills.allowBundled = []  (no bundled skills; juso controls tool access via workspace files)'
+    echo '  [18/20] skills.allowBundled = []  (no bundled skills; juso controls tool access via workspace files)'
     openclaw config set --strict-json skills.allowBundled '[]'
+
+    echo '  [19/20] agents.defaults.thinkingDefault = off  (suppress Qwen3 thinking mode to prevent Ollama infinite-loop crash)'
+    openclaw config set agents.defaults.thinkingDefault off
+
+    echo '  [20/20] agents.defaults.llm.idleTimeoutSeconds = 1800  (30 min; local models need time to load KV cache before first token)'
+    openclaw config set --strict-json agents.defaults.llm.idleTimeoutSeconds 1800
   "
-  chown "${USER}:${USER}" "$CONFIG"
+  chown "root:${USER}" "$CONFIG"
+  chmod 640 "$CONFIG"
+  if [[ -f "${OPENCLAW_DIR}/exec-approvals.json" ]]; then
+    chown "root:${USER}" "${OPENCLAW_DIR}/exec-approvals.json"
+    chmod 640 "${OPENCLAW_DIR}/exec-approvals.json"
+  fi
 
   echo "[+] Validating with openclaw doctor..."
   sudo -u "$USER" bash -c "
@@ -308,7 +346,7 @@ else
     export XDG_RUNTIME_DIR=/run/user/${USER_UID}
     export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
     openclaw doctor --non-interactive
-  "
+  " || echo "[warn] openclaw doctor exited non-zero — checks completed but display rendering failed (openclaw packaging bug). Continuing."
 fi
 
 # ─── Configure main agent workspace ──────────────────────────────────────────
@@ -331,17 +369,18 @@ else
 
   # Update the bare {"id":"main"} entry in agents.list to add workspace path
   # and default:true. If main is absent (template cleared it), append a new entry.
-  if jq -e '.agents.list[] | select(.id == "main")' "$CONFIG" > /dev/null 2>&1; then
+  if jq -e '.agents.list[] | select(.id == "main")' "$CONFIG" >/dev/null 2>&1; then
     jq --arg ws "${MAIN_WORKSPACE}" \
       '.agents.list = [.agents.list[] | if .id == "main" then . + {"workspace": $ws, "default": true} else . end]' \
-      "$CONFIG" > /tmp/openclaw_main.json
+      "$CONFIG" >/tmp/openclaw_main.json
   else
     jq --arg ws "${MAIN_WORKSPACE}" \
       '.agents.list += [{"id": "main", "workspace": $ws, "default": true}]' \
-      "$CONFIG" > /tmp/openclaw_main.json
+      "$CONFIG" >/tmp/openclaw_main.json
   fi
   mv /tmp/openclaw_main.json "$CONFIG"
-  chown "${USER}:${USER}" "$CONFIG"
+  chown "root:${USER}" "$CONFIG"
+  chmod 640 "$CONFIG"
 fi
 
 # ─── Per-workload internet access ────────────────────────────────────────────

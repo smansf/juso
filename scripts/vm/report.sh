@@ -3,7 +3,7 @@
 # Generates a health, status, and progress report for all agents in a workload.
 # Safe to run at any time — before, during, or after an agent run.
 # Usage: bash report.sh <workload>
-# Runs as: the workload Linux user (juso-<workload>)
+# Runs as: the workload Linux user (<workload>)
 
 set -uo pipefail
 
@@ -142,12 +142,12 @@ for AGENT in "${AGENTS[@]}"; do
   if [[ -n "${LATEST_SESSION}" ]]; then
     FILE_MTIME="$(stat -c %Y "${LATEST_SESSION}" 2>/dev/null)" || FILE_MTIME=0
     NOW="$(date +%s)"
-    SESSION_AGE_SECONDS=$(( NOW - FILE_MTIME ))
+    SESSION_AGE_SECONDS=$((NOW - FILE_MTIME))
 
-    if (( SESSION_AGE_SECONDS < 60 )); then
+    if ((SESSION_AGE_SECONDS < 60)); then
       emit "Last session activity: ${SESSION_AGE_SECONDS} seconds ago"
-    elif (( SESSION_AGE_SECONDS < 3600 )); then
-      emit "Last session activity: $(( SESSION_AGE_SECONDS / 60 )) minutes ago"
+    elif ((SESSION_AGE_SECONDS < 3600)); then
+      emit "Last session activity: $((SESSION_AGE_SECONDS / 60)) minutes ago"
     else
       ACTIVITY_TIME="$(date -d "@${FILE_MTIME}" "+%Y-%m-%d %H:%M" 2>/dev/null)" || ACTIVITY_TIME="unknown"
       emit "Last session activity: ${ACTIVITY_TIME}"
@@ -165,11 +165,11 @@ for AGENT in "${AGENTS[@]}"; do
     RUN_STATUS="NOT RUNNING (gateway down)"
   elif [[ -z "${LATEST_SESSION}" ]]; then
     RUN_STATUS="NOT STARTED (no sessions found)"
-  elif (( SESSION_AGE_SECONDS < 300 )); then
+  elif ((SESSION_AGE_SECONDS < 300)); then
     RUN_STATUS="LIKELY ACTIVE"
   elif [[ "${LOG_PRESENT}" == present ]]; then
     RUN_STATUS="LIKELY COMPLETE"
-  elif (( SESSION_AGE_SECONDS < 3600 )); then
+  elif ((SESSION_AGE_SECONDS < 3600)); then
     RUN_STATUS="LIKELY STALLED OR RECENTLY COMPLETED"
   else
     RUN_STATUS="IDLE (last activity >1 hour ago)"
@@ -194,9 +194,9 @@ for AGENT in "${AGENTS[@]}"; do
     emit "### Progress: ${AGENT}"
     emit ""
 
-    if (( HOOK_EXIT == 0 )) && [[ -n "${hook_stdout}" ]]; then
+    if ((HOOK_EXIT == 0)) && [[ -n "${hook_stdout}" ]]; then
       emit "${hook_stdout}"
-    elif (( HOOK_EXIT == 124 )); then
+    elif ((HOOK_EXIT == 124)); then
       emit "⚠ Hook timed out after 30 seconds"
     else
       HOOK_STDERR="$(cat "${HOOK_STDERR_FILE}" 2>/dev/null)" || true

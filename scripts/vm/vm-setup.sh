@@ -1,25 +1,9 @@
 #!/usr/bin/env bash
-# =============================================================================
-# juso VM setup script
-#
-# Run once on the VM after Ubuntu installation, as juso-admin-vm.
-# Idempotent — safe to re-run if interrupted.
-#
-# What this script does:
-#   - Updates system packages
-#   - Installs essential packages
-#   - Sets hostname and timezone
-#   - Enables NTP time sync (required for gateway JWT auth)
-#   - Configures UFW firewall (LAN isolation with Ollama and NTP exceptions)
-#   - Disables unnecessary services
-#   - Enables automatic security updates
-#
-# What this script does NOT do:
-#   - VPN setup (optional — see mini-vm-setup.md)
-#   - SSH key configuration (covered in MacBook Pro setup guide)
-#   - OpenClaw installation (covered in OpenClaw setup guide)
-#   - Workload provisioning (covered by provision-workload.sh)
-# =============================================================================
+# vm-setup.sh — One-time VM setup after Ubuntu installation. Run as
+# juso-admin-vm. Idempotent. Touches system packages, hostname, timezone, NTP,
+# UFW (LAN isolation with Ollama + NTP exceptions), unnecessary services, and
+# unattended security updates. Does NOT touch VPN, SSH keys, OpenClaw install,
+# or workload provisioning — those are covered by separate guides/scripts.
 
 set -euo pipefail
 
@@ -45,7 +29,7 @@ sudo hostnamectl set-hostname "${HOSTNAME}"
 
 # Add hostname to /etc/hosts if not already present
 if ! grep -q "127.0.1.1.*${HOSTNAME}" /etc/hosts; then
-  echo "127.0.1.1 ${HOSTNAME}" | sudo tee -a /etc/hosts > /dev/null
+  echo "127.0.1.1 ${HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
 fi
 
 # -----------------------------------------------------------------------------
@@ -168,7 +152,7 @@ sudo ufw --force enable
 # -----------------------------------------------------------------------------
 echo "--> Configuring DNS (systemd-resolved)"
 sudo mkdir -p /etc/systemd/resolved.conf.d
-cat <<EOF | sudo tee /etc/systemd/resolved.conf.d/dns.conf > /dev/null
+cat <<EOF | sudo tee /etc/systemd/resolved.conf.d/dns.conf >/dev/null
 [Resolve]
 DNS=1.1.1.1 8.8.8.8
 FallbackDNS=9.9.9.9
@@ -179,7 +163,7 @@ sudo systemctl restart systemd-resolved
 # Disable unnecessary services
 # -----------------------------------------------------------------------------
 echo "--> Disabling unnecessary services"
-sudo systemctl disable --now apport  2>/dev/null || true
+sudo systemctl disable --now apport 2>/dev/null || true
 sudo systemctl disable --now whoopsie 2>/dev/null || true
 
 # -----------------------------------------------------------------------------

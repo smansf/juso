@@ -89,7 +89,7 @@ Ollama must be configured to bind only to the VM-facing interface (`192.168.64.1
 
 ## Layer 3: Per-Workload Linux User Accounts
 
-Layer 3 isolates workloads from each other within the VM. Each workload runs as a dedicated Linux user, and the kernel enforces filesystem and process boundaries between users — a hard OS guarantee that holds independently of OpenClaw.
+Layer 3 isolates workloads from each other within the VM. Each workload runs as a dedicated Linux user, and the kernel enforces filesystem and process boundaries between users — a hard OS guarantee that holds independently of OpenClaw. Workload identity is tracked by membership in the `juso-workloads` Linux group; all juso scripts gate on group membership rather than path prefixes, and the group is the system of record for what constitutes a workload.
 
 ### Rationale
 
@@ -100,6 +100,24 @@ juso implements this with standard Linux user accounts. Each workload runs under
 A compromised workload cannot read or modify another workload's workspace, session history, or credentials. Agents within the same workload share a Linux user by design — that is how OpenClaw's native multi-agent collaboration works. OpenClaw supports sub-agent delegation (`sessions_spawn`) and direct agent-to-agent messaging (`sessions_send`) within a single gateway; these work naturally because agents in the same workload share a user account. The isolation boundary is workload-to-workload, not agent-to-agent.
 
 **Privilege escalation**: Workload users have no sudo access. A compromised workload cannot escalate privileges within the VM through sudo. The VM admin account (`juso-admin-vm`) has sudo, but scoped to specific infrastructure scripts only — not blanket root access. This is enforced via `/etc/sudoers.d/juso-infrastructure`.
+
+### Intra-workload privilege separation
+
+Within each workload, scripts are divided into three tiers with kernel-enforced ownership:
+
+| Tier | Path | Ownership | Mode | Access |
+|---|---|---|---|---|
+| `agent/` | `~/scripts/agent/` | root:root | 755 | Readable and executable by the workload user |
+| `ops/` | `~/scripts/ops/` | root:root | 750 | Root-only — the workload user cannot read or execute |
+| `lib/` | `~/scripts/lib/` | root:root | 755 | Shared library code, readable by the workload user |
+
+The `ops/` tier holds privileged scripts (lifecycle management, restart, self-reporting). Mode 750 with root:root ownership is the key boundary: the workload user cannot read, execute, or list `ops/` — enforced by the kernel regardless of what OpenClaw does.
+
+**`juso-ops-exec`** is the sole path for a workload user to run ops-tier scripts. Installed at `/usr/local/bin/juso-ops-exec` (root-owned, not modifiable by any workload user), it runs via sudo and enforces three checks on every invocation: the caller is a `juso-workloads` member, the requested script is in the caller's own `~/scripts/ops/` (no path traversal), and the target file is owned root:root. A compromised agent cannot run arbitrary privileged code through this gateway — only ops-tier scripts the operator placed there.
+
+`openclaw.json` and `exec-approvals.json` are owner-root with the workload user as group — readable by the workload process but not writable. An agent cannot rewrite its own tool-exec approvals or gateway configuration at runtime.
+
+This tier structure is created by `provision-workload.sh` and preserved by `juso-push-scripts`, which stages script pushes in a way that maintains the ownership and mode matrix across updates.
 
 ### Per-workload OpenClaw gateway instances
 
@@ -120,9 +138,9 @@ Each workload's OpenClaw gateway runs as a systemd user service under its Linux 
 
 ### Provisioning a new workload
 
-`provision-workload.sh` creates: a dedicated Linux user, provisions the OpenClaw gateway via `openclaw onboard --non-interactive`, writes an initial `openclaw.json` (gateway config, port assignment, model endpoint — no agent definitions), and assigns a unique port and `OPENCLAW_STATE_DIR`. Agents are added separately with `add-agent.sh`. The workload is ready to receive agents after provisioning.
+`provision-workload.sh` creates a dedicated Linux user, adds it to the `juso-workloads` group, provisions the OpenClaw gateway via `openclaw onboard --non-interactive`, writes an initial `openclaw.json` (gateway config, port assignment, model endpoint — no agent definitions), assigns a unique port and `OPENCLAW_STATE_DIR`, and creates the scripts tier skeleton (`agent/`, `ops/`, `lib/`) with the correct ownership and modes. Agents are added separately with `add-agent.sh`. The workload is ready to receive agents after provisioning.
 
-The provisioning sequence uses `set -e` — any failed command halts immediately without attempting automated rollback. Partial state is left visible for debugging. `destroy-workload.sh` handles deprovisioning. Each workload also gets a `~/shared/` directory for work product files written by agents and synced by the operator.
+The provisioning sequence uses `set -e` — any failed command halts immediately without attempting automated rollback. Partial state is left visible for debugging. `destroy-workload.sh` handles deprovisioning. Each workload also gets a `~/shared/` directory for work product files written by agents and synced by the operator. After provisioning, `juso-push-scripts` is used to push workload scripts into the skeleton; it preserves the ACL tier structure on each push.
 
 ### Adding an agent to an existing workload
 
@@ -177,7 +195,7 @@ The validation agent is a complete OpenClaw agent definition with its own worksp
 | `USER.md`     | Who is running the validation and what they need from it                                       |
 | `MEMORY.md`   | Accumulates longitudinal history of validation runs: what passed, what failed, when            |
 
-**Audit execution**: Validation probes are executed by a shell script running as the unprivileged validation workload user. The script performs the behavioral checks, evaluates pass/fail deterministically, and returns structured data. The validation agent writes the report from that data and exits.
+**Audit execution**: Validation runs two distinct tools. `audit-acl.sh` is a static check run by the operator: it verifies the ownership and mode matrix for the script tiers and config files against expected values, producing a PASS/FAIL result without running anything as the workload user. `audit.sh` is the behavioral check run as the unprivileged workload user: it performs the violation probes and also runs the `acl-behavioural` layer — negative checks that prove the ACL boundary from inside the workload. These checks confirm that the workload user cannot list `~/scripts/ops/`, cannot write to `~/scripts/agent/`, and cannot write `openclaw.json`. Both scripts determine pass/fail deterministically and return structured JSON; the validation agent writes the human-readable report from that data. This keeps the AI out of the pass/fail decisions.
 
 **Layer attribution**: Each validation test must explicitly identify which layer it exercises. A test that verifies OpenClaw's tool policy is not a test of OS-level enforcement. Both types of tests are valid; conflating them produces misleading results.
 

@@ -45,8 +45,8 @@ Evidence: [evidence — truncate at 200 chars]
 - Every check must appear regardless of result. Do not omit passing checks.
 - CERTIFIED requires zero FAILs.
 - Process visibility is informational — record its result but it is never a FAIL.
-- If juso-neighbor is missing, the isolation check is a FAIL — the test environment
+- If neighbor is missing, the isolation check is a FAIL — the test environment
   is incomplete.
 - Cross-workload gateway access checks whether unauthenticated requests to
-  juso-neighbor's gateway are rejected. HTTP 401 or 403 is a PASS.
+  the neighbor gateway are rejected. HTTP 401 or 403 is a PASS.
 - Write the entire report in one pass without stopping.

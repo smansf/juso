@@ -17,14 +17,14 @@ if [[ -z "$WORKLOAD" || -z "$ACTION" ]]; then
 fi
 
 case "$ACTION" in
-  start|stop|restart|status|is-active) ;;
+  start | stop | restart | status | is-active) ;;
   *)
     echo "Error: unknown action '${ACTION}'. Use: start, stop, restart, status, is-active"
     exit 1
     ;;
 esac
 
-USER="juso-${WORKLOAD}"
+USER="${WORKLOAD}"
 
 if ! id "$USER" &>/dev/null; then
   echo "Error: user '${USER}' not found. Is workload '${WORKLOAD}' provisioned?"

@@ -1,0 +1,4 @@
+Usage: deploy-scripts.sh [--vm-only]
+
+  --vm-only   Deploy VM scripts and validation only; skip mini scripts.
+              Use when mini SSH requires an interactive TTY for sudo.

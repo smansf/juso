@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
-# =============================================================================
-# juso audit script
-#
-# Behavioral security audit for the juso platform.
-# Runs as an unprivileged workload user (juso-validation). No sudo required.
-#
-# Assumptions:
-#   - OWN_PORT is read at runtime from ~/.openclaw/openclaw.json via jq.
-#   - juso-neighbor is always provisioned as the isolation test target.
-#     If absent, the isolation check FAILs.
-#
-# Usage:  /usr/local/bin/audit.sh
-# Output: JSON to stdout
-# Exit:   0 = all checks completed (inspect JSON for results)
-#         1 = script-level error (missing dependency, etc.)
-# =============================================================================
+# audit.sh — Behavioral security audit for the juso platform. Runs as an
+# unprivileged workload user; reads OWN_PORT from ~/.openclaw/openclaw.json.
+# Requires `neighbor` workload to be provisioned (isolation target).
+# Outputs JSON to stdout. Exit 0 = checks completed (inspect JSON for results),
+# exit 1 = script-level error.
 
 set -euo pipefail
 
@@ -27,7 +16,7 @@ if [[ -z "$OWN_PORT" ]]; then
   exit 1
 fi
 
-NEIGHBOR_USER="juso-neighbor"
+NEIGHBOR_USER="neighbor"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 checks=()
@@ -40,15 +29,15 @@ checks=()
 add_check() {
   local json
   json=$(jq -n \
-    --arg name        "$1" \
+    --arg name "$1" \
     --arg display_name "$2" \
-    --arg layer       "$3" \
-    --arg what        "$4" \
-    --arg why         "$5" \
-    --arg expected    "$6" \
-    --arg actual      "$7" \
-    --arg result      "$8" \
-    --arg evidence    "$9" \
+    --arg layer "$3" \
+    --arg what "$4" \
+    --arg why "$5" \
+    --arg expected "$6" \
+    --arg actual "$7" \
+    --arg result "$8" \
+    --arg evidence "$9" \
     '{
       name:         $name,
       display_name: $display_name,
@@ -98,8 +87,8 @@ output=$(curl --max-time 10 --silent "${OLLAMA_URL}/api/tags" 2>&1) || true
 
 qwen_present=false
 nomic_present=false
-echo "$output" | grep -q 'qwen3:30b'         && qwen_present=true
-echo "$output" | grep -q 'nomic-embed-text'  && nomic_present=true
+echo "$output" | grep -q 'qwen3:30b' && qwen_present=true
+echo "$output" | grep -q 'nomic-embed-text' && nomic_present=true
 
 if $qwen_present && $nomic_present; then
   add_check "ollama_model_availability" "Ollama model availability" "infrastructure" \
@@ -111,7 +100,7 @@ if $qwen_present && $nomic_present; then
     "qwen3:30b: present, nomic-embed-text: present"
 else
   missing=""
-  $qwen_present  || missing+="qwen3:30b missing "
+  $qwen_present || missing+="qwen3:30b missing "
   $nomic_present || missing+="nomic-embed-text missing"
   add_check "ollama_model_availability" "Ollama model availability" "infrastructure" \
     "Required models present in Ollama" \
@@ -348,12 +337,12 @@ fi
 ss_output=$(ss -tlnp 2>&1) || true
 
 # Extract local address:port column from LISTEN lines, filter out expected ones
-unexpected=$(echo "$ss_output" | awk '/LISTEN/{print $4}' | \
-  grep -v '^127\.'     | \
-  grep -v '^\[::1\]'   | \
-  grep -v '^::1'       | \
-  grep -v ':22$'       | \
-  grep -v '^\*:22$') || true
+unexpected=$(echo "$ss_output" | awk '/LISTEN/{print $4}' \
+  | grep -v '^127\.' \
+  | grep -v '^\[::1\]' \
+  | grep -v '^::1' \
+  | grep -v ':22$' \
+  | grep -v '^\*:22$') || true
 
 if [[ -z "$unexpected" ]]; then
   add_check "unexpected_listeners" "Unexpected listeners" "infrastructure" \
@@ -433,7 +422,7 @@ fi
 # =============================================================================
 
 # ── Cross-workload file access ────────────────────────────────────────────────
-# juso-neighbor is a required isolation test target, always provisioned alongside
+# neighbor is a required isolation test target, always provisioned alongside
 # the validation workload. Home directories are mode 700; permission denied on
 # ls is the expected and reliable PASS condition.
 
@@ -441,17 +430,17 @@ NEIGHBOR_HOME="/home/${NEIGHBOR_USER}"
 
 if [[ ! -d "$NEIGHBOR_HOME" ]]; then
   add_check "cross_workload_file_access" "Cross-workload file access" "isolation" \
-    "Attempt to list juso-neighbor home directory" \
+    "Attempt to list ${NEIGHBOR_USER} home directory" \
     "Readable workload home directory means filesystem isolation failed" \
     "Permission denied" \
-    "juso-neighbor not found — test environment incomplete" \
+    "${NEIGHBOR_USER} not found — test environment incomplete" \
     "FAIL" \
     "ls ${NEIGHBOR_HOME}: no such directory"
 else
   ls_output=$(ls "$NEIGHBOR_HOME" 2>&1) || ls_exit=$?
   if [[ ${ls_exit:-0} -ne 0 ]] && echo "$ls_output" | grep -qi 'permission denied'; then
     add_check "cross_workload_file_access" "Cross-workload file access" "isolation" \
-      "Attempt to list juso-neighbor home directory" \
+      "Attempt to list ${NEIGHBOR_USER} home directory" \
       "Readable workload home directory means filesystem isolation failed" \
       "Permission denied" \
       "Permission denied (isolation holds)" \
@@ -459,7 +448,7 @@ else
       "ls ${NEIGHBOR_HOME}: permission denied"
   elif [[ ${ls_exit:-0} -eq 0 ]]; then
     add_check "cross_workload_file_access" "Cross-workload file access" "isolation" \
-      "Attempt to list juso-neighbor home directory" \
+      "Attempt to list ${NEIGHBOR_USER} home directory" \
       "Readable workload home directory means filesystem isolation failed" \
       "Permission denied" \
       "Directory listing succeeded — filesystem isolation FAILED" \
@@ -467,7 +456,7 @@ else
       "ls ${NEIGHBOR_HOME}: $(truncate "$ls_output")"
   else
     add_check "cross_workload_file_access" "Cross-workload file access" "isolation" \
-      "Attempt to list juso-neighbor home directory" \
+      "Attempt to list ${NEIGHBOR_USER} home directory" \
       "Readable workload home directory means filesystem isolation failed" \
       "Permission denied" \
       "Unexpected error checking neighbor directory" \
@@ -477,20 +466,20 @@ else
 fi
 
 # ── Cross-workload gateway access ────────────────────────────────────────────
-# Probes juso-neighbor's gateway loopback port. PASS = OpenClaw HTML response,
+# Probes the neighbor gateway loopback port. PASS = OpenClaw HTML response,
 # confirming the gateway is loopback-bound (not exposed on a LAN interface).
 # Auth is enforced at the token layer for agent operations; the HTTP dashboard
 # layer returns 200 HTML without a token — that is expected behaviour.
 # Requires sudo access to juso-workload-list (granted in sudoers).
 
-NEIGHBOR_PORT=$(sudo juso-workload-list 2>/dev/null | grep "^neighbor:" | cut -d: -f2) || true
+NEIGHBOR_PORT=$(sudo juso-workload-list 2>/dev/null | grep "^${NEIGHBOR_USER}:" | cut -d: -f2) || true
 
 if [[ -z "$NEIGHBOR_PORT" ]]; then
   add_check "cross_workload_gateway" "Cross-workload gateway access" "isolation" \
-    "HTTP probe on juso-neighbor gateway loopback port" \
+    "HTTP probe on ${NEIGHBOR_USER} gateway loopback port" \
     "Loopback-bound gateway cannot be reached from the LAN; auth is enforced at the token layer" \
     "OpenClaw HTML response (loopback binding confirmed)" \
-    "Could not determine juso-neighbor port — test environment incomplete" \
+    "Could not determine ${NEIGHBOR_USER} port — test environment incomplete" \
     "FAIL" \
     "sudo juso-workload-list: neighbor port not found"
 else
@@ -498,7 +487,7 @@ else
 
   if echo "$gw_body" | grep -qi 'openclaw\|doctype html'; then
     add_check "cross_workload_gateway" "Cross-workload gateway access" "isolation" \
-      "HTTP probe on juso-neighbor gateway loopback port ${NEIGHBOR_PORT}" \
+      "HTTP probe on ${NEIGHBOR_USER} gateway loopback port ${NEIGHBOR_PORT}" \
       "Loopback-bound gateway cannot be reached from the LAN; auth is enforced at the token layer" \
       "OpenClaw HTML response (loopback binding confirmed)" \
       "OpenClaw HTML response — neighbor gateway is loopback-bound" \
@@ -506,7 +495,7 @@ else
       "curl http://127.0.0.1:${NEIGHBOR_PORT}: OpenClaw HTML response received"
   elif [[ -z "$gw_body" ]]; then
     add_check "cross_workload_gateway" "Cross-workload gateway access" "isolation" \
-      "HTTP probe on juso-neighbor gateway loopback port ${NEIGHBOR_PORT}" \
+      "HTTP probe on ${NEIGHBOR_USER} gateway loopback port ${NEIGHBOR_PORT}" \
       "Loopback-bound gateway cannot be reached from the LAN; auth is enforced at the token layer" \
       "OpenClaw HTML response (loopback binding confirmed)" \
       "No response — neighbor gateway not running; loopback binding cannot be confirmed" \
@@ -514,7 +503,7 @@ else
       "curl http://127.0.0.1:${NEIGHBOR_PORT}: no response (timeout/refused)"
   else
     add_check "cross_workload_gateway" "Cross-workload gateway access" "isolation" \
-      "HTTP probe on juso-neighbor gateway loopback port ${NEIGHBOR_PORT}" \
+      "HTTP probe on ${NEIGHBOR_USER} gateway loopback port ${NEIGHBOR_PORT}" \
       "Loopback-bound gateway cannot be reached from the LAN; auth is enforced at the token layer" \
       "OpenClaw HTML response (loopback binding confirmed)" \
       "Unexpected response — not OpenClaw HTML" \
@@ -524,22 +513,22 @@ else
 fi
 
 # ── Process visibility (informational) ───────────────────────────────────────
-# Records whether juso-neighbor's processes are visible from juso-validation.
+# Records whether neighbor's processes are visible from validation.
 # On default Linux, all users can see all processes — this is a known
 # characteristic, not a configuration failure. Never FAILs.
 
 proc_output=$(ps aux 2>&1 | grep "${NEIGHBOR_USER}" | grep -v grep || true)
 
 if [[ -z "$proc_output" ]]; then
-  proc_actual="juso-neighbor processes not visible from this user"
+  proc_actual="${NEIGHBOR_USER} processes not visible from this user"
   proc_evidence="ps aux | grep ${NEIGHBOR_USER}: no results"
 else
-  proc_actual="juso-neighbor processes visible (default Linux behaviour)"
+  proc_actual="${NEIGHBOR_USER} processes visible (default Linux behaviour)"
   proc_evidence="$(truncate "$proc_output")"
 fi
 
 add_check "process_visibility" "Process visibility" "isolation" \
-  "Visibility of juso-neighbor processes via ps" \
+  "Visibility of ${NEIGHBOR_USER} processes via ps" \
   "Process visibility between workloads (informational)" \
   "Informational — not a pass/fail criterion" \
   "$proc_actual" \
@@ -547,11 +536,89 @@ add_check "process_visibility" "Process visibility" "isolation" \
   "$proc_evidence"
 
 # =============================================================================
+# ACL behavioural layer (negative checks — workload user must NOT succeed)
+# =============================================================================
+
+# ── ops/ unreadable ──────────────────────────────────────────────────────────
+
+ls_exit=0
+ls_output=$(ls "${HOME}/scripts/ops/" 2>&1) || ls_exit=$?
+if [[ ${ls_exit} -ne 0 ]] && echo "$ls_output" | grep -qi 'permission denied'; then
+  add_check "acl_ops_unreadable" "ops/ unreadable to workload user" "acl-behavioural" \
+    "ls ~/scripts/ops/" \
+    "Workload user must not enumerate operator-only scripts" \
+    "Permission denied" \
+    "Permission denied (ACL holds)" \
+    "PASS" \
+    "ls: permission denied"
+else
+  add_check "acl_ops_unreadable" "ops/ unreadable to workload user" "acl-behavioural" \
+    "ls ~/scripts/ops/" \
+    "Workload user must not enumerate operator-only scripts" \
+    "Permission denied" \
+    "Listing succeeded — ACL FAILED" \
+    "FAIL" \
+    "$(truncate "$ls_output")"
+fi
+
+# ── agent/ unwritable ────────────────────────────────────────────────────────
+
+probe="${HOME}/scripts/agent/_audit_probe_$$"
+touch_exit=0
+touch_output=$(touch "$probe" 2>&1) || touch_exit=$?
+if [[ ${touch_exit} -ne 0 ]] && echo "$touch_output" | grep -qi 'permission denied'; then
+  add_check "acl_agent_unwritable" "agent/ unwritable to workload user" "acl-behavioural" \
+    "touch ~/scripts/agent/_audit_probe" \
+    "Workload user must not add new agent-callable scripts" \
+    "Permission denied" \
+    "Permission denied (ACL holds)" \
+    "PASS" \
+    "touch: permission denied"
+else
+  rm -f "$probe" 2>/dev/null || true
+  add_check "acl_agent_unwritable" "agent/ unwritable to workload user" "acl-behavioural" \
+    "touch ~/scripts/agent/_audit_probe" \
+    "Workload user must not add new agent-callable scripts" \
+    "Permission denied" \
+    "Touch succeeded — ACL FAILED" \
+    "FAIL" \
+    "$(truncate "$touch_output")"
+fi
+
+# ── openclaw.json unwritable ─────────────────────────────────────────────────
+
+config="${HOME}/.openclaw/openclaw.json"
+write_exit=0
+write_err=$(mktemp)
+if ! echo '' 2>"$write_err" >>"$config"; then
+  write_exit=1
+fi
+write_output=$(<"$write_err")
+rm -f "$write_err"
+if [[ ${write_exit} -ne 0 ]] && echo "$write_output" | grep -qi 'permission denied'; then
+  add_check "acl_openclaw_unwritable" "openclaw.json unwritable to workload user" "acl-behavioural" \
+    ">> ~/.openclaw/openclaw.json" \
+    "Workload user must not rewrite gateway policy" \
+    "Permission denied" \
+    "Permission denied (ACL holds)" \
+    "PASS" \
+    "echo: permission denied"
+else
+  add_check "acl_openclaw_unwritable" "openclaw.json unwritable to workload user" "acl-behavioural" \
+    ">> ~/.openclaw/openclaw.json" \
+    "Workload user must not rewrite gateway policy" \
+    "Permission denied" \
+    "Append succeeded — ACL FAILED" \
+    "FAIL" \
+    "$(truncate "$write_output")"
+fi
+
+# =============================================================================
 # Output
 # =============================================================================
 
 checks_json=$(printf '%s\n' "${checks[@]}" | jq -s '.')
 jq -n \
-  --arg    timestamp "$TIMESTAMP" \
-  --argjson checks   "$checks_json" \
+  --arg timestamp "$TIMESTAMP" \
+  --argjson checks "$checks_json" \
   '{timestamp: $timestamp, checks: $checks}'

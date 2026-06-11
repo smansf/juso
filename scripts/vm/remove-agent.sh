@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
-# remove-agent.sh
-# Removes an agent from an existing workload's OpenClaw gateway.
-# Usage: sudo ~/juso/scripts/remove-agent.sh <workload-name> <agent-name>
-# Run from the repo root as juso-admin-vm.
-#
-# Stops the gateway, removes the agent via the OpenClaw CLI, removes
-# the workspace directory, and restarts the gateway if other agents remain.
-#
-# This operation is irreversible — agent workspace and session history
-# are permanently deleted.
+# remove-agent.sh — Remove an agent from an existing workload's OpenClaw
+# gateway. Stops the gateway, removes the agent via OpenClaw CLI, deletes the
+# workspace directory, restarts the gateway if other agents remain.
+# Irreversible. Run as juso-admin-vm via sudo from the repo root.
 
 set -euo pipefail
 
@@ -37,7 +31,7 @@ fi
 
 # ─── Check workload exists ───────────────────────────────────────────────────
 
-USER="juso-${WORKLOAD}"
+USER="${WORKLOAD}"
 
 if ! id "$USER" &>/dev/null; then
   echo "Error: workload '${WORKLOAD}' is not provisioned (user '${USER}' not found)."

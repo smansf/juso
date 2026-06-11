@@ -2,6 +2,8 @@
 
 Day-to-day reference for running the juso platform once it is set up. Setup procedures are in the setup guides; validation procedures are in validation.md.
 
+Most sections describe operations the agent operator (Claude) handles — read them to understand and oversee what is running on your behalf. The [Maintenance](#maintenance) section covers operations the human performs directly.
+
 Run everything in this guide from the MacBook unless otherwise noted.
 
 ---
@@ -25,12 +27,12 @@ Shell functions from `scripts/macbook/juso-ops.sh` (sourced in `~/.zshrc`):
 ```bash
 # Start
 juso-start-ollama                  # Start Ollama on the Mac mini
-juso-start-vm                      # Start the VM (allow ~15s to boot)
+juso-start-vm                      # Start the VM (allow ~15s to boot) ⚠ see below
 juso-start-workload <workload>     # Start a workload's OpenClaw gateway
 
 # Stop
 juso-stop-workload <workload>      # Stop a workload's gateway
-juso-stop-vm                       # Stop the VM
+juso-stop-vm                       # Stop the VM (checks reachability, then graceful poweroff)
 juso-stop-ollama                   # Stop Ollama
 
 # Check everything at once
@@ -38,6 +40,8 @@ juso-status
 ```
 
 Run `juso-help` for a full command reference.
+
+**Starting the VM requires Screen Sharing.** `juso-start-vm` cannot start the VM over SSH — `utmctl` requires a local GUI session on the Mac mini. The VM starts automatically when juso logs in; for a manual start after a shutdown, connect via Screen Sharing and use UTM. All other start/stop operations — including `juso-stop-vm` — work over SSH and can be performed by the operator agent (Claude) from the MacBook without any manual steps.
 
 Ollama must be running before workloads start. If Ollama goes down while workloads are running, agents will fail their inference calls. Restart Ollama (`juso-start-ollama`), then restart affected workloads.
 
@@ -90,6 +94,65 @@ juso-start-workload <workload>
 
 ---
 
+## scripts/{agent,ops,lib} kernel ACL
+
+Each workload gets a kernel-ACL-protected scripts tree under `/home/<workload>/scripts/`. The platform tiers are:
+
+| Tier | Owner | Mode | Purpose |
+|---|---|---|---|
+| `agent/` | `root:root` | `755` | Agent-callable. Workload user can read + exec, cannot write. |
+| `ops/` | `root:root` | `750` | Operator-only. Workload user cannot read or list. |
+| `lib/` | `root:root` | `755` | Shared helpers. Workload user can read. |
+
+Workloads may define additional tiers (e.g. `dispatcher/`). Convention: non-platform tiers are `root:root 755`, applied by `juso-rsync-scripts` at push time.
+
+**Workload-side authoring.** Workloads keep their scripts in their own repos under `<workload>/scripts/{agent,ops,lib,...}/`. To deploy:
+
+```bash
+juso-push-scripts <workload>     # From your workloads repo root
+```
+
+This stages content under `/tmp/juso-push-staging-<workload>/` as the workload user, then invokes `/usr/local/bin/juso-rsync-scripts` as root to move into place with the ownership matrix.
+
+**Running operator scripts.** Workload-user processes (including OpenClaw agents) cannot read `ops/`. Operator invocations go through `juso-ops-exec`:
+
+```bash
+juso-ops-exec <workload> <script-name> [args...]
+```
+
+**Patching openclaw.json.** Workload-user processes cannot write to `~/.openclaw/openclaw.json` (owned `root:<workload> 640`). Operator patches use `juso-config-set`:
+
+```bash
+juso-config-set <workload> <jq-path> <value> [--strict-json]
+```
+
+For complex jq operations, write a helper in the workload's `ops/` tier and invoke via `juso-ops-exec`.
+
+**Auditing.** Static ownership/mode checks:
+
+```bash
+juso-audit-acl <workload>
+```
+
+Behavioural negative checks (run as the workload user via `audit.sh`) confirm the workload user cannot enumerate `ops/`, cannot create files under `agent/`, and cannot append to `openclaw.json`. See `juso-report <workload>` for the full audit output.
+
+---
+
+## Secrets management
+
+Workload secrets (API keys, tokens) live in `~/.openclaw/.env` on the VM, owned by the workload user. Two primitives manage them:
+
+```bash
+juso-write-secret <workload> <KEY>     # Prompt and write a secret to ~/.openclaw/.env
+juso-check-secret <workload> <KEY>     # Verify a key is present in ~/.openclaw/.env
+```
+
+`juso-write-secret` prompts for the value without echoing it and writes or updates the key in the workload's `.env` file. `juso-check-secret` returns zero if the key is present and non-empty, non-zero otherwise — use it as a precondition before operations that depend on a secret being set.
+
+`juso-configure-telegram` calls `juso-check-secret` internally to enforce that `TELEGRAM_BOT_TOKEN` is written before any Telegram config is applied. Other secrets (e.g. `BRAVE_API_KEY` for web search) should be written with `juso-write-secret` before starting the gateway.
+
+---
+
 ## Validation
 
 See [validation.md](validation.md) for full procedures.
@@ -97,7 +160,7 @@ See [validation.md](validation.md) for full procedures.
 Run the audit script directly from the MacBook without opening the dashboard:
 
 ```bash
-ssh -t vm "sudo -u juso-validation /usr/local/bin/audit.sh | jq ."
+ssh -t vm "sudo -u validation /usr/local/bin/audit.sh | jq ."
 ```
 
 Trigger the validation-auditor agent for a full formatted report: open the `validation` workload dashboard and send `run the audit`.
@@ -107,6 +170,8 @@ Re-validate after any change to the platform: OpenClaw upgrade, UFW rule change,
 ---
 
 ## Maintenance
+
+The following procedures are performed by the human operator, not the agent operator.
 
 ### Updating Ollama
 
@@ -130,15 +195,57 @@ Re-validate after any change to the platform: OpenClaw upgrade, UFW rule change,
 
 OpenClaw updates are applied deliberately, not automatically — new versions can introduce new attack surfaces alongside patches.
 
-1. Review the release notes for breaking changes or new CVEs.
-2. Install the update on the VM following the same procedure in `guides/openclaw-setup.md`.
-3. Run `openclaw doctor --fix` as `juso-admin-vm` to auto-correct any config schema changes:
-   ```bash
-   openclaw doctor --fix
-   ```
-4. Run a full validation audit. Do not resume agent workloads until CERTIFIED.
+**Procedure:**
 
-TODO: The upgrade procedure above should be scripted as `scripts/vm/upgrade-openclaw.sh` before the next upgrade is performed. The script should handle the UFW rule open/close, the `npm install`, and the `doctor --fix` call in sequence, and must close the firewall rules even if an intermediate step fails.
+1. Review the release notes for the target version. Check for breaking changes, new CVEs, and config schema changes.
+
+2. Stop all workloads from the MacBook:
+   ```bash
+   juso-stop-workload <workload>    # repeat for each workload
+   ```
+
+3. SSH to the VM as `juso-admin-vm`.
+
+4. Open UFW for outbound traffic:
+   ```bash
+   sudo ufw allow out 443/tcp
+   ```
+
+5. Install the target version using `openclaw update --tag`, which handles the download and runs a diagnostic check:
+   ```bash
+   openclaw update --tag <version> --no-restart
+   ```
+   `--tag` accepts an exact version string (e.g. `v2026.3.24`). `--no-restart` is required — the admin account has no gateway to restart, and workload startup is managed by juso. Always specify an explicit version tag; never run `openclaw update` without `--tag` as it will pull the latest unvalidated release.
+
+6. Close UFW immediately — do not skip or defer this step:
+   ```bash
+   sudo ufw delete allow out 443/tcp
+   ```
+
+7. Verify the installed version:
+   ```bash
+   openclaw --version
+   ```
+
+8. Run doctor --fix as each workload user to migrate each workload's config:
+   ```bash
+   sudo -u <workload> openclaw doctor --fix    # repeat for each workload
+   ```
+   Between versions, OpenClaw may change config key names, on-disk directory layouts, plugin manifest formats, and supervisor config defaults. `doctor --fix` applies these migrations immediately and comprehensively. The gateway handles some migrations automatically on startup, but running `--fix` proactively ensures a clean state. `openclaw update` only runs a diagnostic `doctor` (no --fix); per-workload migration still requires this manual step.
+
+   Run this only as workload users via `sudo -u`. Running `doctor --fix` as `juso-admin-vm` creates gateway artifacts (config files, systemd service) on the wrong account.
+
+   Do not reinstall the gateway service or regenerate auth tokens when prompted — those are managed by juso. Review any proposed changes that go beyond schema corrections before accepting.
+
+9. Run a full validation audit. Do not resume any workloads until CERTIFIED:
+   ```bash
+   ssh -t vm "sudo -u validation /usr/local/bin/audit.sh | jq ."
+   ```
+
+10. Start workloads from the MacBook:
+    ```bash
+    juso-start-workload <workload>    # repeat for each workload
+    ```
 
 ### Deploying script updates to the VM
 
@@ -156,8 +263,8 @@ Take a new snapshot after any significant change to the VM baseline: OS updates,
 
 1. Stop all workloads from the MacBook: `juso-stop-workload <workload>` for each.
 2. Stop the VM: `juso-stop-vm`.
-3. On the Mac mini (screen sharing as `juso`): open UTM, right-click the VM, take snapshot. Name it `juso-vm-YYYY-MM-DD`.
-4. Start the VM: `juso-start-vm`. Start each workload: `juso-start-workload <workload>`.
+3. On the Mac mini (Screen Sharing as `juso`): open UTM, right-click the VM, take snapshot. Name it `juso-vm-YYYY-MM-DD`. This step requires Screen Sharing — UTM's snapshot UI has no SSH-accessible equivalent.
+4. Start the VM via Screen Sharing and UTM (`juso-start-vm` cannot start the VM over SSH). Then start each workload: `juso-start-workload <workload>`.
 
 A snapshot restore is treated the same as a rebuild — run a full validation audit before resuming agent workloads.
 
@@ -229,15 +336,15 @@ ssh vm "echo ok"
 `juso-ctl` checks for the workload user's session at startup and prints an explicit fix if it's missing:
 
 ```
-Error: user session not running for 'juso-<workload>'. Is linger enabled?
-  Fix: sudo loginctl enable-linger juso-<workload>
+Error: user session not running for '<workload>'. Is linger enabled?
+  Fix: sudo loginctl enable-linger <workload>
 ```
 
 If that error appears:
 
 ```bash
-ssh vm "sudo loginctl enable-linger juso-<workload>"
-ssh vm "sudo systemctl start user@\$(id -u juso-<workload>).service"
+ssh vm "sudo loginctl enable-linger <workload>"
+ssh vm "sudo systemctl start user@\$(id -u <workload>).service"
 juso-start-workload <workload>
 ```
 
@@ -247,11 +354,17 @@ If linger is enabled but the service still fails, check the service logs on the 
 ssh vm "sudo juso-ctl <workload> status"
 ```
 
-For deeper log inspection, SSH into the VM and check as the workload user:
+To tail the active gateway log from the MacBook:
+
+```bash
+juso-logs <workload>
+```
+
+For systemd journal logs (service start/stop events and crash output):
 
 ```bash
 ssh vm
-sudo -u juso-<workload> bash -c "
+sudo -u <workload> bash -c "
   export XDG_RUNTIME_DIR=/run/user/\$(id -u)
   journalctl --user -u openclaw-gateway --lines=50
 "
@@ -269,10 +382,10 @@ If the gateway starts but the port doesn't respond, run `openclaw doctor` as the
 
 ```bash
 ssh vm "sudo jq '.gateway.bind = \"loopback\"' \
-  /home/juso-<workload>/.openclaw/openclaw.json \
+  /home/<workload>/.openclaw/openclaw.json \
   > /tmp/oc_fixed.json && \
-  sudo mv /tmp/oc_fixed.json /home/juso-<workload>/.openclaw/openclaw.json && \
-  sudo chown juso-<workload>:juso-<workload> /home/juso-<workload>/.openclaw/openclaw.json"
+  sudo mv /tmp/oc_fixed.json /home/<workload>/.openclaw/openclaw.json && \
+  sudo chown <workload>:<workload> /home/<workload>/.openclaw/openclaw.json"
 juso-stop-workload <workload>
 juso-start-workload <workload>
 ```
@@ -306,3 +419,11 @@ ssh vm "timedatectl show --property=NTPSynchronized --value"  # should return: y
 ```
 
 **Root cause fix**: `vm-setup.sh` now includes `timedatectl set-ntp true` and `ufw allow out 123/udp`. VMs provisioned before this update need the two commands above applied manually. Re-run `install-vm-infrastructure.sh` as well to pick up the NOPASSWD fix for `juso-dashboard` token retrieval.
+
+### Agent times out after 60 seconds (`idleTimeoutSeconds` ignored)
+
+**Symptom**: The `main` agent times out after 60 seconds regardless of the `idleTimeoutSeconds` value in `openclaw.json`.
+
+**Cause**: OpenClaw 2026.4.8 hardcodes `idleTimeoutSeconds` to 60s on embedded runs, silently ignoring the configured value. `provision-workload.sh` sets 1800s, which 2026.4.8 ignores.
+
+**Workaround**: Run the `main` agent on `qwen3:30b`. This is a known upstream issue in 2026.4.8.

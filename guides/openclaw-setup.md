@@ -36,8 +36,10 @@ npm --version
 Install the OpenClaw CLI globally so that all workload user accounts created later by `provision-workload.sh` can access the binary:
 
 ```bash
-sudo npm install -g openclaw
+sudo npm install -g openclaw@<version>
 ```
+
+Pinning an explicit version is recommended — see the current tested version at the end of this section. For subsequent upgrades, use `openclaw update --tag <version>` instead (see `guides/operations.md`).
 
 Do not run `openclaw onboard` as `juso-admin-vm`. Onboarding is performed by `provision-workload.sh`, which runs it as the workload user via `sudo -u`. Running it manually as `juso-admin-vm` would create a gateway under the wrong account with no workload isolation.
 
@@ -47,7 +49,7 @@ Verify:
 openclaw --version
 ```
 
-juso was built and tested on **v2026.3.13**. Later releases were not stable enough at time of publication.
+Current tested version: **v2026.4.8** (upgraded May 2026). Pin the version explicitly when upgrading — see the upgrade procedure in `guides/operations.md`.
 
 ---
 

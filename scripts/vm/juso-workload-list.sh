@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# juso-workload-list.sh
-# Lists all provisioned juso workloads and their gateway ports.
-# Scans /home/juso-*/ directories, reads gateway.port from each workload's
-# openclaw.json via jq.
-#
-# Requires root (workload home directories are mode 700).
-# Install path: /usr/local/bin/juso-workload-list
-#
-# Output: one line per workload, format: <name>:<port>
-# Exit:   0 = success
-#         1 = error (missing jq, etc.)
+# juso-workload-list.sh — List all provisioned juso workloads and their gateway
+# ports. Discovers workloads via the juso-workloads group; workload name equals
+# Linux username. Requires root (home directories are mode 700). Output: one
+# line per workload, format <name>:<port>. Installed at
+# /usr/local/bin/juso-workload-list.
 
 set -euo pipefail
 
@@ -18,22 +12,16 @@ if ! command -v jq &>/dev/null; then
   exit 1
 fi
 
-for home_dir in /home/juso-*/; do
-  [[ -d "$home_dir" ]] || continue
+members=$(getent group juso-workloads 2>/dev/null | cut -d: -f4) || true
+[[ -z "$members" ]] && exit 0
 
-  username=$(basename "$home_dir")
-
-  # Skip the admin account
-  [[ "$username" == "juso-admin-vm" ]] && continue
-
-  # Extract workload name (strip juso- prefix)
-  workload="${username#juso-}"
-
-  config="${home_dir}.openclaw/openclaw.json"
+while IFS= read -r workload; do
+  [[ -z "$workload" ]] && continue
+  config="/home/${workload}/.openclaw/openclaw.json"
   if [[ -f "$config" ]]; then
     port=$(jq -r '.gateway.port // empty' "$config" 2>/dev/null) || true
     if [[ -n "$port" ]]; then
       echo "${workload}:${port}"
     fi
   fi
-done
+done < <(echo "$members" | tr ',' '\n')

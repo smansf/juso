@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
-# add-agent.sh
-# Adds a new agent to an existing workload's OpenClaw gateway.
-# Usage: sudo ~/juso/scripts/add-agent.sh <workload-name> <agent-name>
-# Run from the repo root as juso-admin-vm.
-#
-# Runs the OpenClaw agent creation wizard as the workload user.
-# The wizard is interactive — you will be prompted for agent configuration.
-# After the wizard exits, the gateway is restarted if it was running.
+# add-agent.sh — Add a new agent to an existing workload's OpenClaw gateway.
+# Runs the OpenClaw agent creation wizard as the workload user (interactive
+# prompts), then restarts the gateway if it was running. --non-interactive
+# skips the wizard and patches openclaw.json directly. Run as juso-admin-vm
+# via sudo from the repo root.
 
 set -euo pipefail
 
 # ─── Usage ───────────────────────────────────────────────────────────────────
 
+NON_INTERACTIVE=false
+if [[ "${1:-}" == "--non-interactive" ]]; then
+  NON_INTERACTIVE=true
+  shift
+fi
+
 WORKLOAD="${1:-}"
 AGENT="${2:-}"
 
 if [[ -z "$WORKLOAD" || -z "$AGENT" ]]; then
-  echo "Usage: sudo ~/juso/scripts/add-agent.sh <workload-name> <agent-name>"
+  echo "Usage: sudo ~/juso/scripts/add-agent.sh [--non-interactive] <workload-name> <agent-name>"
   echo "Example: sudo ~/juso/scripts/add-agent.sh research collector"
   exit 1
 fi
@@ -47,7 +50,7 @@ fi
 
 # ─── Check workload exists ───────────────────────────────────────────────────
 
-USER="juso-${WORKLOAD}"
+USER="${WORKLOAD}"
 
 if ! id "$USER" &>/dev/null; then
   echo "Error: workload '${WORKLOAD}' is not provisioned (user '${USER}' not found)."
@@ -58,6 +61,7 @@ fi
 USER_UID=$(id -u "$USER")
 USER_HOME="/home/${USER}"
 OPENCLAW_DIR="${USER_HOME}/.openclaw"
+CONFIG="${OPENCLAW_DIR}/openclaw.json"
 WORKSPACE_DIR="${OPENCLAW_DIR}/workspace/${AGENT}"
 
 # ─── Check agent does not already exist ──────────────────────────────────────
@@ -75,23 +79,53 @@ if juso-ctl "$WORKLOAD" status 2>/dev/null | grep -q "active (running)"; then
   GATEWAY_WAS_RUNNING=true
 fi
 
-# ─── Run openclaw agents add as the workload user ────────────────────────────
+# ─── Add agent: interactive or non-interactive ───────────────────────────────
 
 echo ""
 echo "==> Adding agent '${AGENT}' to workload '${WORKLOAD}'"
 echo ""
-echo "    The OpenClaw agent wizard will now run."
-echo "    Answer the prompts to configure the agent."
-echo "    When asked for the workspace path, accept the default or use:"
-echo "    ${WORKSPACE_DIR}"
-echo ""
 
-sudo -u "$USER" bash -c "
-  export HOME=${USER_HOME}
-  export XDG_RUNTIME_DIR=/run/user/${USER_UID}
-  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
-  openclaw agents add ${AGENT}
-"
+if [[ "$NON_INTERACTIVE" == true ]]; then
+  echo "    (non-interactive: creating directories and patching config directly)"
+  echo ""
+
+  # Create workspace and agent state directories
+  mkdir -p "${WORKSPACE_DIR}/memory"
+  mkdir -p "${OPENCLAW_DIR}/agents/${AGENT}/sessions"
+  mkdir -p "${OPENCLAW_DIR}/agents/${AGENT}/agent"
+  chown -R "${USER}:${USER}" "${WORKSPACE_DIR}"
+  chown -R "${USER}:${USER}" "${OPENCLAW_DIR}/agents/${AGENT}"
+
+  # Placeholder AGENTS.md so the gateway does not complain on startup before
+  # real files are pushed with juso-push-agent.
+  echo "# ${AGENT}" >"${WORKSPACE_DIR}/AGENTS.md"
+  chown "${USER}:${USER}" "${WORKSPACE_DIR}/AGENTS.md"
+
+  # Patch openclaw.json: add agent entry to agents.list
+  if ! jq -e --arg a "$AGENT" '.agents.list[] | select(.id == $a)' "$CONFIG" >/dev/null 2>&1; then
+    jq --arg agent "$AGENT" --arg ws "$WORKSPACE_DIR" \
+      '.agents.list += [{"id": $agent, "workspace": $ws}]' \
+      "$CONFIG" >/tmp/oc_add_agent.json
+    mv /tmp/oc_add_agent.json "$CONFIG"
+    chown "${USER}:${USER}" "$CONFIG"
+    echo "    Patched openclaw.json: added ${AGENT} to agents.list"
+  else
+    echo "    (${AGENT} already in agents.list — skipping patch)"
+  fi
+else
+  echo "    The OpenClaw agent wizard will now run."
+  echo "    Answer the prompts to configure the agent."
+  echo "    When asked for the workspace path, accept the default or use:"
+  echo "    ${WORKSPACE_DIR}"
+  echo ""
+
+  sudo -u "$USER" bash -c "
+    export HOME=${USER_HOME}
+    export XDG_RUNTIME_DIR=/run/user/${USER_UID}
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
+    openclaw agents add ${AGENT}
+  "
+fi
 
 # ─── Verify workspace was created ────────────────────────────────────────────
 
@@ -134,14 +168,14 @@ MAIN_HAS_WORKSPACE=$(jq -r '(.agents.list[] | select(.id == "main") | .workspace
 
 if [[ -z "$MAIN_HAS_WORKSPACE" ]]; then
   echo "[+] Patching main agent workspace path..."
-  if jq -e '.agents.list[] | select(.id == "main")' "$CONFIG" > /dev/null 2>&1; then
+  if jq -e '.agents.list[] | select(.id == "main")' "$CONFIG" >/dev/null 2>&1; then
     jq --arg ws "${MAIN_WORKSPACE}" \
       '.agents.list = [.agents.list[] | if .id == "main" then . + {"workspace": $ws, "default": true} else . end]' \
-      "$CONFIG" > /tmp/openclaw_main_patch.json
+      "$CONFIG" >/tmp/openclaw_main_patch.json
   else
     jq --arg ws "${MAIN_WORKSPACE}" \
       '.agents.list += [{"id": "main", "workspace": $ws, "default": true}]' \
-      "$CONFIG" > /tmp/openclaw_main_patch.json
+      "$CONFIG" >/tmp/openclaw_main_patch.json
   fi
   mv /tmp/openclaw_main_patch.json "$CONFIG"
   chown "${USER}:${USER}" "$CONFIG"

@@ -102,7 +102,7 @@ echo 'SetEnv PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' | sudo tee -a /e
 sudo launchctl stop com.openssh.sshd
 ```
 
-Note: `utmctl` requires a local GUI session and does not work over SSH — this is a hard constraint of the tool. The VM starts and stops automatically via UTM's auto-start configuration (set up in the VM guide). If you ever need to manually start or stop the VM, use Screen Sharing to connect to the Mac mini and control UTM directly. The symlink and PATH steps above are still useful for running `utmctl --help` and similar informational commands over SSH.
+Note: `utmctl` requires a local GUI session and does not work over SSH — this is a hard constraint of the tool. **Stopping the VM does not require utmctl**: `juso-stop-vm` issues a graceful poweroff from inside the VM over SSH. Starting the VM is the exception — the VM starts automatically via UTM's auto-start on juso login, and a manual start after shutdown requires Screen Sharing. The symlink and PATH steps above are still useful for running `utmctl --help` and similar informational commands over SSH.
 
 **Ollama** — model inference server. Install from [ollama.com/download](https://ollama.com/download). OpenClaw also supports cloud model providers — Anthropic, OpenAI, Google, and others — configured via `openclaw.json`. If using a cloud provider exclusively, Ollama installation and the configuration steps in Part 2 can be skipped.
 

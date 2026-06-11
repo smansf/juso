@@ -10,7 +10,7 @@ Run everything in this guide on the VM as `juso-admin-vm` unless otherwise noted
 
 Validation uses two components with a clear division of responsibility.
 
-`audit.sh` runs the checks. It executes every validation probe as the unprivileged `juso-validation` workload user, evaluates PASS/FAIL deterministically, and returns structured JSON.
+`audit.sh` runs the checks. It executes every validation probe as the unprivileged `validation` workload user, evaluates PASS/FAIL deterministically, and returns structured JSON.
 
 The validation auditor agent writes the report. It invokes `audit.sh`, receives the JSON results, writes the markdown audit report, replies with the verdict summary, and exits.
 
@@ -38,7 +38,7 @@ This split means: the script handles all check execution (under 30 seconds, full
 
 **Verdict taxonomy:** Binary. Every check is either PASS or FAIL. No warnings. If a result is ambiguous, it is a FAIL. A CERTIFIED verdict requires zero FAILs across all checks.
 
-**Scope boundary:** The audit certifies behavior from the perspective of the `juso-validation` workload user. It verifies what an unprivileged workload can reach, read, execute, or escalate to from inside the containment boundary.
+**Scope boundary:** The audit certifies behavior from the perspective of the `validation` workload user. It verifies what an unprivileged workload can reach, read, execute, or escalate to from inside the containment boundary.
 
 ---
 
@@ -67,9 +67,9 @@ sudo ~/juso/scripts/remove-agent.sh validation main
 
 # Deploy workspace files from the repo
 sudo cp -r ~/juso/validation/agents/validation-auditor/* \
-  /home/juso-validation/.openclaw/workspace/validation-auditor/
-sudo chown -R juso-validation:juso-validation \
-  /home/juso-validation/.openclaw/workspace/validation-auditor/
+  /home/validation/.openclaw/workspace/validation-auditor/
+sudo chown -R validation:validation \
+  /home/validation/.openclaw/workspace/validation-auditor/
 
 # Start the gateway
 sudo juso-ctl validation start
@@ -93,13 +93,13 @@ The auditor writes its full report to `audits/YYYY-MM-DD.md` in its workspace an
 
 ```bash
 # Full JSON output
-ssh -t vm "sudo -u juso-validation /usr/local/bin/audit.sh | jq ."
+ssh -t vm "sudo -u validation /usr/local/bin/audit.sh | jq ."
 
 # Results summary only
-ssh -t vm "sudo -u juso-validation /usr/local/bin/audit.sh | jq '[.checks[] | {name, result}]'"
+ssh -t vm "sudo -u validation /usr/local/bin/audit.sh | jq '[.checks[] | {name, result}]'"
 
 # Failures only
-ssh -t vm "sudo -u juso-validation /usr/local/bin/audit.sh | \
+ssh -t vm "sudo -u validation /usr/local/bin/audit.sh | \
   jq '[.checks[] | select(.result == \"FAIL\") | {name, actual, evidence}]'"
 ```
 
@@ -109,7 +109,7 @@ Run standalone to verify the script is passing before triggering the agent. This
 
 ## Check list
 
-All checks are behavioral. The audit certifies that the system behaves as intended from the perspective of the `juso-validation` workload user — unprivileged, isolated, running on the same containment architecture as any production workload.
+All checks are behavioral. The audit certifies that the system behaves as intended from the perspective of the `validation` workload user — unprivileged, isolated, running on the same containment architecture as any production workload.
 
 ### Infrastructure
 
@@ -147,11 +147,11 @@ This single check is the behavioral equivalent of three former config checks: se
 
 | Check | Behavioral test | PASS condition |
 |---|---|---|
-| Cross-workload file access | `ls /home/juso-neighbor/` | Permission denied |
+| Cross-workload file access | `ls /home/neighbor/` | Permission denied |
 | Cross-workload gateway access | `curl http://127.0.0.1:<neighbor-port>` | OpenClaw HTML response (loopback binding confirmed) |
-| Process visibility | `ps aux \| grep juso-neighbor` | Informational — never a FAIL |
+| Process visibility | `ps aux \| grep neighbor` | Informational — never a FAIL |
 
-`juso-neighbor` is a required part of the standard juso setup. If `/home/juso-neighbor/` does not exist, the isolation check is a FAIL — the test environment is incomplete.
+`neighbor` is a required part of the standard juso setup. If `/home/neighbor/` does not exist, the isolation check is a FAIL — the test environment is incomplete.
 
 ---
 

@@ -1,0 +1,4 @@
+Usage: juso-config-set <workload> <jq-path> <value> [--strict-json]
+
+  <jq-path>    dotted path, e.g. agents.defaults.timeoutSeconds
+  <value>      string by default; with --strict-json, parsed as JSON

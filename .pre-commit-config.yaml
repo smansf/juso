@@ -1,0 +1,31 @@
+repos:
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck --severity=warning
+        language: system
+        files: \.sh$
+      - id: shfmt
+        name: shfmt
+        entry: shfmt -i 2 -bn -ci -w
+        language: system
+        files: \.sh$
+      - id: header-cap
+        name: header-cap
+        entry: scripts/lint/header-cap.sh
+        language: system
+        files: \.sh$
+        exclude: ^scripts/lint/
+      - id: help-runs
+        name: help-runs
+        entry: scripts/lint/help-runs.sh
+        language: system
+        files: \.sh$
+        exclude: ^scripts/lint/
+      - id: help-snapshots
+        name: help-snapshots
+        entry: scripts/lint/help-snapshots.sh
+        language: system
+        files: \.sh$
+        exclude: ^(scripts/lint/|test-fixtures/)

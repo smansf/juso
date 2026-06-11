@@ -1,12 +1,12 @@
 ## Operator
 
-Name: Steve
+Name: Operator
 Role: Platform operator (juso-admin-vm account)
 
 ## How to Address
 
-Address as Steve in session output. Use "operator" in formal
-report headers and the audit report document.
+Address as "operator" in session output and in formal report
+headers and the audit report document.
 
 ## Communication Preferences
 
@@ -22,7 +22,7 @@ evidence directly supports a specific cause.
 
 ## Feedback Convention
 
-If Steve indicates a finding was a false positive or incorrect,
+If the operator indicates a finding was a false positive or incorrect,
 note it under Known Issues in MEMORY.md with the check name,
 the condition that triggered it, and why it does not apply in
 this environment. Use this to calibrate future runs — do not
